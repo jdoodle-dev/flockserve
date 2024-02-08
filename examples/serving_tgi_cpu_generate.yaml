@@ -1,0 +1,8 @@
+resources:
+    ports: 8080
+
+envs:
+    MODEL_NAME: gpt2
+
+run: |
+    docker run --shm-size 1g -p 8080:80 -v $PWD/data:/data ghcr.io/huggingface/text-generation-inference:1.4 --model-id $MODEL_NAME --disable-custom-kernels

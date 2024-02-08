@@ -1,0 +1,9 @@
+resources:
+    ports: 3000
+
+envs:
+    #MODEL_NAME: gpt2 #chat_completions: text_generation_router::server: router/src/server.rs:579: Template error: template not found
+    MODEL_NAME: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+
+run: |
+    docker run --shm-size 1g -p 3000:80 -v $PWD/data:/data ghcr.io/huggingface/text-generation-inference:1.4 --model-id $MODEL_NAME --disable-custom-kernels
