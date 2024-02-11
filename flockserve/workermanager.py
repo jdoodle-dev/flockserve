@@ -5,6 +5,7 @@ import multiprocessing
 from dataclasses import dataclass, field
 from typing import Optional
 import sky
+from flockserve.utils import  record_metrics
 
 @dataclass
 class WorkerHandler:
@@ -49,15 +50,10 @@ class WorkerManager():
 		#     self.logger.info("Error:", e)
 
 
-	@staticmethod
-	async def finished_initializing(worker_handler: WorkerHandler):
+	async def finished_initializing(self, worker_handler: WorkerHandler):
 		cluster_statuses = sky.status(cluster_names=None, refresh=False)
 		cluster_status = next((x for x in cluster_statuses if x['name'] == worker_handler.worker_name), None)
-		# Add verbosity-based logging
-		# print('='*50)
-		# print("cluster_status")
-		# print('='*50)
-		# print(cluster_status)
+		self.flockserve.logger.debug(f"cluster_status: {cluster_status}")
 
 		# Head IP only exists for the workers that have initialization completed.
 		if cluster_status and isinstance(cluster_status.get('handle', {}).head_ip, str):
@@ -96,9 +92,8 @@ class WorkerManager():
 			skypilot_job_queue = sky.queue(cluster_name=worker_name)
 			return next((True for job in skypilot_job_queue if job.get('status').value == 'RUNNING'), False)
 
-	@staticmethod
-	async def setup_initialized_worker(worker_handler: WorkerHandler, port):
-		if await WorkerManager.finished_initializing(worker_handler):
+	async def setup_initialized_worker(self, worker_handler: WorkerHandler, port):
+		if await self.finished_initializing(worker_handler):
 			# Set base_url
 			cluster_statuses = sky.status(cluster_names=None, refresh=False)
 			cluster_status = next((x for x in cluster_statuses if x['name'] == worker_handler.worker_name), None)
@@ -109,6 +104,12 @@ class WorkerManager():
 		try:
 			worker_load = sum([w.queue_length for w in self.worker_handlers])
 			ready_worker_count = await self.ready_worker_count()
+
+			record_metrics(self.flockserve.metrics.meters, {'worker_meter': len(self.worker_handlers),
+			                                        'live_worker_meter': ready_worker_count,
+			                                        'worker_load_meter': worker_load,
+			                                        'queue_length_running_mean': round(queue_length_running_mean,2)})
+
 			self.flockserve.logger.info(f"Workers: {len(self.worker_handlers)}, "
 			                            f"Workers Ready: {ready_worker_count}, "
 			                            f"Worker Load: {worker_load}, "
@@ -131,10 +132,9 @@ class WorkerManager():
 	async def periodic_worker_check(self):
 		while True:
 			for worker in list(self.worker_handlers):
-				# Add verbosity levels
-				# print('Checking worker: ', worker.worker_name)
-				# print('initializing: ', worker.initializing)
-				# print('ready: ', worker.ready)
+				self.flockserve.logger.debug(f"Checking worker: {worker.worker_name}")
+				self.flockserve.logger.debug(f"initializing: {worker.initializing}")
+				self.flockserve.logger.debug(f"ready: {worker.ready}")
 
 				if worker.initializing:
 					if await self.finished_initializing(worker):
@@ -153,8 +153,10 @@ class WorkerManager():
 							if not(worker.ready):
 								worker.ready = True
 								self.flockserve.logger.info(f"Worker ready: {worker.worker_name} ")
+								record_metrics(self.flockserve.metrics.meters, {'readiness_meter': 1})
 						else:
 							self.flockserve.logger.info(f"Worker not ready: {worker.worker_name} ")
+							record_metrics(self.flockserve.metrics.meters, {'readiness_meter': 0})
 							worker.ready = False
 					except Exception as e:
 						self.flockserve.logger.info(f"Error during health check : {e}")

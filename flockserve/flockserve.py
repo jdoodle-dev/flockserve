@@ -8,6 +8,7 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 import uvicorn
 import json
 import sky
+from flockserve.telemetry import OTLPMetricsGenerator
 
 from typing import Dict, Any
 from flockserve.loadbalancer import LeastConnectionLoadBalancer
@@ -29,10 +30,14 @@ class FlockServe:
         autoscale_up: int = 7,
         autoscale_down: int = 4,
         queue_tracking_window: int = 600,
-        node_control_key: str = None
+        node_control_key: str = None,
+        metrics_id: int = 1,
+        verbosity: int = 1, # 0: no logging, 1: info, 2: debug
+        otel_collector_endpoint: str = "http://localhost:4317",
+        otel_metrics_exporter_settings: Dict[str, Any] = {},
     ) -> None:
         self.logger = logging.getLogger(__name__)
-        logging.basicConfig(level=logging.INFO)
+        self.logger.setLevel(10 if verbosity>=2 else 20 if verbosity==1 else 40)
         self.skypilot_task = sky.Task.from_yaml(skypilot_task)
         self.worker_capacity = worker_capacity
         self.worker_name_prefix = worker_name_prefix
@@ -52,8 +57,10 @@ class FlockServe:
         self.load_balancer = LeastConnectionLoadBalancer(self)
         self.autoscaler = RunningMeanLoadAutoscaler(self, autoscale_up, autoscale_down=autoscale_down,
                                                     max_workers=max_workers, min_workers=min_workers)
+        self.metrics = OTLPMetricsGenerator(metrics_id=metrics_id, otel_collector_endpoint=otel_collector_endpoint, otel_metrics_exporter_settings=otel_metrics_exporter_settings)
         self.start_time = time.time()
         self.total_requests = 0
+        self.verbosity = verbosity
 
         @self.app.get("/")
         async def root_handler():
@@ -70,7 +77,7 @@ class FlockServe:
         async def remove_existing_node(request: Request):
             headers = request.headers
             node_name = headers.get('node_name', None)
-            if headers['key'] == self.node_control_key:
+            if headers['node_control_key'] == self.node_control_key:
                 try:
                     if node_name:
                         await self.worker_manager.delete_worker(
@@ -88,7 +95,7 @@ class FlockServe:
         @self.app.get("/add_new_node")
         async def add_new_node(request: Request):
             headers = request.headers
-            if headers['key'] == self.node_control_key:
+            if headers['node_control_key'] == self.node_control_key:
                 try:
                     await self.worker_manager.start_skypilot_worker(worker_id=self.worker_manager.get_next_worker_id(), reinit=False)
                     return {"message": "New node added."}
