@@ -33,7 +33,7 @@ The default option for load balancing uses Least Connection Load Balancing, whic
 
 #### Prerequisites
 
-- Python >= 3.7, < 3.11
+- Python >= 3.7, < 3.12
 - Docker (if using containerized deployment)
 
 #### Installation
