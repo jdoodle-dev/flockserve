@@ -1,0 +1,26 @@
+logging:
+  receivers:
+    endpointlog:
+      type: files
+      include_paths:
+        - {Abs_path_to_user_home}/flockserve.log # Replace Abs_path_to_user_home with the actual absolute path to user home
+  service:
+    pipelines:
+      default_pipeline:
+        receivers:
+          - endpointlog
+combined:
+  receivers:
+    otlp:
+      type: otlp
+      metrics_mode: googlecloudmonitoring
+metrics:
+  service:
+    pipelines:
+      otlp:
+        receivers: [otlp]
+traces:
+  service:
+    pipelines:
+      otlp:
+        receivers: [otlp]
