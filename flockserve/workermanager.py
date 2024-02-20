@@ -162,7 +162,7 @@ class WorkerManager():
 						self.flockserve.logger.info(f"Error during health check : {e}")
 						worker.ready = False
 
-				await asyncio.sleep(20)
+				await asyncio.sleep(30)
 
 	def get_next_worker_id(self):
 		existing_worker_names = [w.worker_name for w in self.worker_handlers]

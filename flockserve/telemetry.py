@@ -2,6 +2,26 @@ from opentelemetry import metrics
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+import logging, sys, os
+
+def get_logger(verbosity):
+
+    log_level = 10 if verbosity >= 2 else 20 if verbosity == 1 else 40
+
+    logger = logging.getLogger(__name__)
+    logger.setLevel(log_level)
+
+    log_file_path = os.path.join(os.path.expanduser('~'), 'flockserve.log')
+    file_handler = logging.FileHandler(log_file_path)
+    file_handler.setLevel(log_level)  # Set the logging level for the file
+    logger.addHandler(file_handler)
+
+
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.setLevel(log_level)  # Set the logging level for stdout
+    logger.addHandler(stream_handler)
+
+    return logger
 
 
 class OTLPMetricsGenerator():
@@ -10,6 +30,8 @@ class OTLPMetricsGenerator():
         If metrics_id smaller than 0,  then no metrics are generated.
         """
         self.metrics_id = metrics_id
+
+
 
         if metrics_id >= 0:
 
@@ -22,7 +44,7 @@ class OTLPMetricsGenerator():
 
             # Set the MeterProvider
             metrics.set_meter_provider(MeterProvider(
-                metric_readers=[PeriodicExportingMetricReader(exporter=otlp_exporter, export_interval_millis=5000)],
+                metric_readers=[PeriodicExportingMetricReader(exporter=otlp_exporter, export_interval_millis=120000)],
             ))
 
             # Obtain a meter

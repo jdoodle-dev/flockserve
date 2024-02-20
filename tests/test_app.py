@@ -30,8 +30,8 @@ def apply_load(url, payload):
 
 
 def test_flockserve():
-
-    command = ["flockserve", "--skypilot_task", "examples/serving_tgi_cpu_generate.yaml",  "--port", "8080", '--autoscale_up', '3', '--autoscale_down', '1', '--max_workers', '2', '--queue_tracking_window', '60', '--verbosity', '2', '--metrics_id', '1']
+    # flockserve --skypilot_task examples/serving_tgi_cpu_generate.yaml --port 8080 --autoscale_up 3 --autoscale_down 1 --max_workers 2 --queue_tracking_window 60 --verbosity 2 --metrics_id 12
+    command = ["flockserve", "--skypilot_task", "examples/serving_tgi_cpu_generate.yaml",  "--port", "8080", '--autoscale_up', '3', '--autoscale_down', '1', '--max_workers', '2', '--queue_tracking_window', '60', '--verbosity', '2', '--metrics_id', '12']
     print(' '.join(command))
     process = subprocess.Popen(command)
     print(f'PID: {process.pid}')

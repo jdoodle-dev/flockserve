@@ -1,0 +1,37 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+  filelog:
+    include: ["~/flockserve.log"]
+    start_at: end
+processors:
+  memory_limiter:
+    check_interval: 5s
+    limit_percentage: 65
+    spike_limit_percentage: 20
+  batch:
+exporters:
+  googlecloud:
+    project:  # Set to your GCP Project ID here
+    user_agent: otel-collector-contrib
+    metric:
+      prefix: "custom.googleapis.com/"
+  logging:
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch, memory_limiter]
+      exporters: [logging, googlecloud]
+    traces:
+      receivers: [otlp]
+      processors: [batch, memory_limiter]
+      exporters: [logging, googlecloud]
+    logs:
+      receivers: [filelog]
+      processors: [batch, memory_limiter]
+      exporters: [logging, googlecloud]

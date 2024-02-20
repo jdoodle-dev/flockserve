@@ -8,7 +8,7 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 import uvicorn
 import json
 import sky
-from flockserve.telemetry import OTLPMetricsGenerator
+from flockserve.telemetry import OTLPMetricsGenerator, get_logger
 
 from typing import Dict, Any
 from flockserve.loadbalancer import LeastConnectionLoadBalancer
@@ -36,8 +36,6 @@ class FlockServe:
         otel_collector_endpoint: str = "http://localhost:4317",
         otel_metrics_exporter_settings: Dict[str, Any] = {},
     ) -> None:
-        self.logger = logging.getLogger(__name__)
-        self.logger.setLevel(10 if verbosity>=2 else 20 if verbosity==1 else 40)
         self.skypilot_task = sky.Task.from_yaml(skypilot_task)
         self.worker_capacity = worker_capacity
         self.worker_name_prefix = worker_name_prefix
@@ -58,9 +56,9 @@ class FlockServe:
         self.autoscaler = RunningMeanLoadAutoscaler(self, autoscale_up, autoscale_down=autoscale_down,
                                                     max_workers=max_workers, min_workers=min_workers)
         self.metrics = OTLPMetricsGenerator(metrics_id=metrics_id, otel_collector_endpoint=otel_collector_endpoint, otel_metrics_exporter_settings=otel_metrics_exporter_settings)
+        self.logger = get_logger(verbosity)
         self.start_time = time.time()
         self.total_requests = 0
-        self.verbosity = verbosity
 
         @self.app.get("/")
         async def root_handler():
@@ -164,7 +162,7 @@ class FlockServe:
     async def run_periodic_load_check(self):
         while True:
             await self.worker_manager.periodic_load_check(self.queue_length_running_mean)
-            await asyncio.sleep(20)
+            await asyncio.sleep(30)
 
     async def handle_inference_request(self, data: bytes, headers, endpoint_path) -> str:
         selected_worker = await self.load_balancer.select_worker()
