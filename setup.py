@@ -10,8 +10,16 @@ with open('README.md') as readme_file:
 with open('HISTORY.md') as history_file:
     history = history_file.read()
 
-requirements = [ "skypilot[all]", "opentelemetry-api", "opentelemetry-exporter-otlp", "opentelemetry-instrumentation", "opentelemetry-sdk", "fastapi",
-                 "opentelemetry-instrumentation-fastapi", 'uvicorn', 'fire']
+requirements = ["skypilot[all]>=0.4.1",
+                "opentelemetry-api>=1.22.0",
+                "opentelemetry-exporter-otlp>=1.22",
+                "opentelemetry-instrumentation",
+                "opentelemetry-sdk>=1.22.0",
+                "fastapi>=0.110.0",
+                "opentelemetry-instrumentation-fastapi>=0.40.0",
+                'uvicorn>=0.23.0',
+                'fire>=0.4.0',
+                ]
 
 test_requirements = ['pytest>=3', ]
 
@@ -41,7 +49,7 @@ setup(
     test_suite='tests',
     tests_require=test_requirements,
     url='https://github.com/jdoodle-dev/flockserve',
-    version='0.1.3',
+    version='0.1.7',
     zip_safe=False,
     entry_points={
         'console_scripts': [
