@@ -6,7 +6,7 @@ receivers:
       http:
         endpoint: 0.0.0.0:4318
   filelog:
-    include: ["~/flockserve.log"]
+    include: ["~/flockserve.log"] # might need to replace relative path with absolute path
     start_at: end
 processors:
   memory_limiter:
