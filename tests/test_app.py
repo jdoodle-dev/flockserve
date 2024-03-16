@@ -6,6 +6,14 @@ import time
 import sky
 import json
 
+COMMAND = ["flockserve", "--skypilot_task", "examples/serving_tgi_cpu_generate.yaml", "--port", "8080",
+           '--autoscale_up', '3', '--autoscale_down', '1', '--max_workers', '2', '--queue_tracking_window', '60',
+           '--verbosity', '2', '--metrics_id', '-1', 'worker_name_prefix', 'worker']
+
+BASE_URL = "http://localhost:8080"
+TEST_URL = BASE_URL + "/generate"
+
+
 async def make_request(url,payload, results_queue, idx):
     async with aiohttp.ClientSession() as session:
         async with session.post(url, json=payload) as response:
@@ -28,27 +36,74 @@ def apply_load(url, payload):
         result = loop.run_until_complete(results_queue.get())
         print(result)
 
+def kill_flockserve_and_clusters(pid=None):
+    try:
+        clusters = sky.status()
+        [sky.down(cluster_name=cluster['name'], purge=True) for cluster in clusters]
+        if pid is not None:
+            subprocess.Popen(["kill", "-9", f"{pid}"])
+    except Exception as e:
+        print(f'Error: {e}')
+        print(f'Catched the error, will rerun the command again.')
+        time.sleep(30)
+        kill_flockserve_and_clusters(pid)
 
-def test_flockserve():
-    # flockserve --skypilot_task examples/serving_tgi_cpu_generate.yaml --port 8080 --autoscale_up 3 --autoscale_down 1 --max_workers 2 --queue_tracking_window 60 --verbosity 2 --metrics_id 12
-    command = ["flockserve", "--skypilot_task", "examples/serving_tgi_cpu_generate.yaml",  "--port", "8080", '--autoscale_up', '3', '--autoscale_down', '1', '--max_workers', '2', '--queue_tracking_window', '60', '--verbosity', '2', '--metrics_id', '12']
-    print(' '.join(command))
-    process = subprocess.Popen(command)
+
+def test_build(n_minutes_threshold=20, kill_after_test=True):
+    """
+    If successfull, Either kill the server and return nothing OR not kill the server and return the process
+    If not successfull, kill the server and raise an exception
+
+    :param n_minutes_threshold:
+    :param kill_after_test:
+    :return:
+    """
+
+    print(' '.join(COMMAND))
+    process = subprocess.Popen(COMMAND)
     print(f'PID: {process.pid}')
 
-    base_url = "http://localhost:8080"
-    test_url = base_url + "/generate"
-
-    # Wait for the server to be ready
+    start_time = time.perf_counter()
+    # If successfull, Either kill the server and return nothing OR not kill the server and return the process
     while True:
         try:
-            r = requests.get(base_url)
+            r = requests.get(BASE_URL)
             if r.json()['ready_worker_count'] >=1:
-                break
+                if kill_after_test:
+                    kill_flockserve_and_clusters(process.pid)
+                    time.sleep(30)
+                else:
+                    return process
             else:
                 time.sleep(10)
         except:
             time.sleep(10)
+
+        # If not successfull, kill the server and raise an exception
+        if time.perf_counter() - start_time > 60*n_minutes_threshold:
+            kill_flockserve_and_clusters()
+            time.sleep(30)
+            raise Exception(f"Server did not start in {n_minutes_threshold} minutes")
+
+
+def test_autoscale():
+    '''
+    Test the autoscaling feature of the server.
+
+    If no clusters are running, it will start a new server and apply load to it.
+    If a cluster with worker-0 is running, will start the flockserve and it will find the worker and apply load to it.
+    If a cluster without worker-0 is running, it will kill the cluster and start a new server and apply load to it.
+    :return:
+    '''
+
+    clusters = sky.status()
+    if len(clusters) == 0:
+        test_build()
+    elif len(clusters) == 1 and 'worker-0' in [worker['name'] for worker in clusters[0]['workers']]:
+        process = test_build(kill_after_test=False)
+    else:
+        kill_flockserve_and_clusters(pid=None) # Only kills the clusters as we don't know if flockserve process is running and or PID of it
+
 
 
     with open('examples/server_test_tgi_generate.json', "r") as f:
@@ -56,15 +111,15 @@ def test_flockserve():
 
     # Apply load to the server and check if it scales up and down
     try:
-        r = requests.post(test_url, json=payload)
+        r = requests.post(TEST_URL, json=payload)
         assert r.status_code == 200
 
-        apply_load(test_url, payload)
+        apply_load(TEST_URL, payload)
 
         i =0
         scale_up_success = False
         while i < 10:
-            r = requests.get(base_url)
+            r = requests.get(BASE_URL)
             if r.json()['ready_worker_count'] > 1:
                 scale_up_success = True
                 break
@@ -77,7 +132,7 @@ def test_flockserve():
         i =0
         scale_down_success = False
         while i < 20:
-            r = requests.get(base_url)
+            r = requests.get(BASE_URL)
             if r.json()['ready_worker_count'] == 1:
                 scale_down_success =  True
                 break
@@ -99,19 +154,12 @@ def test_flockserve():
 
 
 def test_manual_scaling():
-    command = ["flockserve", "--skypilot_task", "examples/serving_tgi_cpu_generate.yaml",  "--port", "8080", "--node_control_key", "tmp123", '--verbosity', '2', '--metrics_id', '-1']
-    process = subprocess.Popen(command)
-    print(f'PID: {process.pid}')
-
-    base_url = "http://localhost:8080"
-    test_url = base_url + "/generate"
-
 
     with open('examples/server_test_tgi_generate.json', "r") as f:
         payload = json.load(f)
 
     try:
-        r = requests.post(test_url, json=payload)
+        r = requests.post(TEST_URL, json=payload)
         assert r.status_code == 200
     except Exception as e:
         print(f'Error: {e}')
