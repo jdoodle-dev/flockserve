@@ -134,7 +134,7 @@ class FlockServe:
             if full_path == "generate":
                 try:
                     if stream == '1' :
-                        return StreamingResponse(self.handle_stream_request(data, headers, f"/{full_path}"))
+                        return StreamingResponse(self.handle_stream_request2(data, headers, f"/{full_path}"))
                     else:
                         s = time.perf_counter()
                         response = await self.handle_inference_request(data, headers, f"/{full_path}")
@@ -257,6 +257,38 @@ class FlockServe:
             if response.status == 200:
                 async for chunk in response.content.iter_any():
                     if chunk:
+                        yield chunk
+
+    async def handle_stream_request2(self, data: bytes, headers, endpoint_path: str):
+        selected_worker = await self.load_balancer.select_worker()
+        sentence_counts = {}  # Dictionary to track the occurrences of each sentence
+
+        async with self.app.state.http_client.post(f"{selected_worker.base_url}{endpoint_path}",
+                                                   json=json.loads(data.decode('utf-8')),
+                                                   headers=headers, timeout=None) as response:
+            i=0
+            if response.status == 200:
+                async for chunk in response.content.iter_any():
+                    i+=1
+                    if chunk:
+                        if ((i+1) % 100) == 0:
+                            # Decode chunk to string
+                            chunk_str = chunk.decode('utf-8')
+
+                            # Split the chunk into sentences
+                            sentences = chunk_str.split('.')
+
+                            # Update sentence counts
+                            for sentence in sentences:
+                                sentence = sentence.strip()  # Remove leading/trailing spaces
+                                if sentence and len(sentence)>10:
+                                    sentence_counts[sentence] = sentence_counts.get(sentence, 0) + 1
+                                    # Check if any sentence occurs more than twice
+                                    if sentence_counts[sentence] > 5:
+                                        # Stop streaming
+                                        print(f"Stopping stream: {sentence}")
+                                        return
+
                         yield chunk
 
 
