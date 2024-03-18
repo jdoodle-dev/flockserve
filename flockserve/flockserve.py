@@ -57,8 +57,8 @@ class FlockServe:
         self.load_balancer = LeastConnectionLoadBalancer(self)
         self.autoscaler = RunningMeanLoadAutoscaler(self, autoscale_up, autoscale_down=autoscale_down,
                                                     max_workers=max_workers, min_workers=min_workers)
-        self.metrics = OTLPMetricsGenerator(metrics_id=metrics_id, otel_collector_endpoint=otel_collector_endpoint,
-                                            otel_metrics_exporter_settings=otel_metrics_exporter_settings)
+        self.metrics = OTLPMetricsGenerator(metrics_id=metrics_id, otel_collector_endpoint=otel_collector_endpoint, otel_metrics_exporter_settings=otel_metrics_exporter_settings
+                                            )
         self.logger = get_logger(verbosity)
         self.start_time = time.time()
         self.total_requests = 0
@@ -115,7 +115,7 @@ class FlockServe:
         @self.app.on_event("startup")
         async def on_startup():
             await self.init_session()
-            await self.worker_manager.start_skypilot_worker(worker_id=0, reinit=False)
+            await self.worker_manager.start_skypilot_worker(worker_id=0, reinit=False )
             asyncio.create_task(self.set_queue_tracker())
             asyncio.create_task(self.run_periodic_load_check())
             asyncio.create_task(self.worker_manager.periodic_worker_check())
@@ -130,40 +130,39 @@ class FlockServe:
         async def forward_request(request: Request, full_path: str):
             headers = {key: value for key, value in request.headers.items()}
             data = await request.body()
+            stream = headers.get('stream', '0')
             if full_path == "generate":
-                # stream = json.loads(data.decode('utf-8')).get('parameters', {}).get('stream', False)
-                # if stream:
-                #     return StreamingResponse(self.handle_stream_request(data, headers, f"/{full_path}"),
-                #                              media_type="text/plain")
-                # else:
                 try:
-                    s = time.perf_counter()
-                    response = await self.handle_inference_request(data, headers, f"/{full_path}")
-                    e = time.perf_counter()
+                    if stream == '1' :
+                        return StreamingResponse(self.handle_stream_request2(data, headers, f"/{full_path}"))
+                    else:
+                        s = time.perf_counter()
+                        response = await self.handle_inference_request(data, headers, f"/{full_path}")
+                        e = time.perf_counter()
 
-                    incoming_req = json.loads(data.decode('utf-8'))
+                        incoming_req = json.loads(data.decode('utf-8'))
 
-                    self.insert_dicts.append({'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
-                                   "execution_time": round(e - s, 2),
-                                   'request'  : json.dumps(incoming_req),
-                                   'response': response,
-                                   'user'     : incoming_req.get('user', ''),
-                                   'platform' : incoming_req.get('platform', ''),
-                                   'request__task'   : incoming_req.get('task', ''),
-                                   'request__language': incoming_req.get('language', ''),
-                                   'request__inputs' :  incoming_req.get('inputs', ''),
-                                   'request__inputs2': incoming_req.get('outputs', ''),
-                                   })
-
-
-
-                    return response
+                        self.insert_dicts.append({'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+                                       "execution_time": round(e - s, 2),
+                                       'request'  : json.dumps(incoming_req),
+                                       'response': response,
+                                       'user'     : incoming_req.get('user', ''),
+                                       'platform' : incoming_req.get('platform', ''),
+                                       'request__task'   : incoming_req.get('task', ''),
+                                       'request__language': incoming_req.get('language', ''),
+                                       'request__inputs' :  incoming_req.get('inputs', ''),
+                                       'request__inputs2': incoming_req.get('outputs', ''),
+                                       })
+                        return response
                 except Exception as e:
                     raise HTTPException(status_code=500, detail=f"Error during processing: {e}")
             else:
                 # Handle other endpoints
                 try:
-                    return await self.handle_inference_request(data, headers, f"/{full_path}")
+                    if stream == '1' :
+                        return StreamingResponse(self.handle_stream_request(data, headers, f"/{full_path}"))
+                    else:
+                        return await self.handle_inference_request(data, headers, f"/{full_path}")
                 except Exception as e:
                     raise HTTPException(status_code=500, detail=f"Error during processing: {e}")
 
@@ -256,12 +255,42 @@ class FlockServe:
                                                    headers=headers, timeout=None) as response:
             # Check if the response status is OK
             if response.status == 200:
-                # Process the streamed data line by line
-                async for line in response.content:
-                    decoded_line = line.decode('utf-8').strip()
-                    self.logger.info(f"decoded_line: {decoded_line}")
-                    # Yield each line
-                    yield decoded_line
+                async for chunk in response.content.iter_any():
+                    if chunk:
+                        yield chunk
+
+    async def handle_stream_request2(self, data: bytes, headers, endpoint_path: str):
+        selected_worker = await self.load_balancer.select_worker()
+        sentence_counts = {}  # Dictionary to track the occurrences of each sentence
+
+        async with self.app.state.http_client.post(f"{selected_worker.base_url}{endpoint_path}",
+                                                   json=json.loads(data.decode('utf-8')),
+                                                   headers=headers, timeout=None) as response:
+            i=0
+            if response.status == 200:
+                async for chunk in response.content.iter_any():
+                    i+=1
+                    if chunk:
+                        if ((i+1) % 100) == 0:
+                            # Decode chunk to string
+                            chunk_str = chunk.decode('utf-8')
+
+                            # Split the chunk into sentences
+                            sentences = chunk_str.split('.')
+
+                            # Update sentence counts
+                            for sentence in sentences:
+                                sentence = sentence.strip()  # Remove leading/trailing spaces
+                                if sentence and len(sentence)>10:
+                                    sentence_counts[sentence] = sentence_counts.get(sentence, 0) + 1
+                                    # Check if any sentence occurs more than twice
+                                    if sentence_counts[sentence] > 5:
+                                        # Stop streaming
+                                        print(f"Stopping stream: {sentence}")
+                                        return
+
+                        yield chunk
+
 
     def run(self):
         uvicorn.run(self.app, host=self.host, port=self.port, timeout_keep_alive=5)
