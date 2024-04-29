@@ -202,4 +202,3 @@ def test_manual_scaling():
 
 if __name__ == "__main__":
     test_flockserve()
-
