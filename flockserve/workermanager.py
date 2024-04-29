@@ -246,13 +246,32 @@ class WorkerManager:
         return worker_id
 
     async def delete_worker(self, worker: WorkerHandler) -> None:
-        self.flockserve.logger.info(f"Deleting worker: {worker.base_url}")
+        self.flockserve.logger.info(f"Deleting worker: {worker.worker_name}")
         async with self.worker_lock:
             i = 0
             while worker.queue_length > 0 and i < 20:  # Assumes max 2 min response
                 i += 1
                 await asyncio.sleep(6)
             if worker in self.worker_handlers:
-                await worker.session.close()
-                sky.down(cluster_name=worker.worker_name, purge=True)
-                self.worker_handlers.remove(worker)
+                while True:
+                    try:
+                        await worker.session.close()
+                        self.flockserve.logger.info(
+                            f"Cut the connection session with {worker.worker_name}"
+                        )
+                        sky.down(cluster_name=worker.worker_name, purge=True)
+                        self.flockserve.logger.info(
+                            f"Run skydown for {worker.worker_name}"
+                        )
+                        self.worker_handlers.remove(worker)
+                        self.flockserve.logger.info(
+                            f"Removed  {worker.worker_name} from worker_handlers"
+                        )
+                        break
+                    except Exception as e:
+                        self.flockserve.logger.error(
+                            f"Following Error During Deleting {worker.worker_name}\n\n{e}"
+                        )
+                        self.flockserve.logger.info(
+                            f"Retrying Deleting {worker.worker_name}"
+                        )
