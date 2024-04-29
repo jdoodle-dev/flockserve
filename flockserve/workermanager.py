@@ -63,19 +63,19 @@ class WorkerManager:
         #     #pass
         #     self.logger.info("Error:", e)
 
-    async def finished_initializing(self, worker_handler: WorkerHandler):
-        cluster_statuses = sky.status(cluster_names=None, refresh=False)
-        cluster_status = next(
-            (x for x in cluster_statuses if x["name"] == worker_handler.worker_name),
-            None,
-        )
+    async def finished_initializing(self, worker_name: str):
+        cluster_status = sky.status(cluster_names=worker_name, refresh=False)
+        # cluster_status = next(
+        # (x for x in cluster_statuses if x["name"] == worker_handler.worker_name),
+        # None,
+        # )
         self.flockserve.logger.debug(f"cluster_status: {cluster_status}")
 
         # Head IP only exists for the workers that have initialization completed.
-        if cluster_status and isinstance(cluster_status.get("handle", {}).head_ip, str):
-            return True
-        else:
-            return False
+        if len(cluster_status) == 1:
+            if isinstance(cluster_status[0].get("handle", {}).head_ip, str):
+                return True
+        return False
 
     async def worker_ready(self, worker_handler: WorkerHandler):
         try:
@@ -121,21 +121,22 @@ class WorkerManager:
             )
 
     async def setup_initialized_worker(self, worker_handler: WorkerHandler, port):
-        if await self.finished_initializing(worker_handler):
-            # Set base_url
-            cluster_statuses = sky.status(cluster_names=None, refresh=False)
-            cluster_status = next(
-                (
-                    x
-                    for x in cluster_statuses
-                    if x["name"] == worker_handler.worker_name
-                ),
-                None,
-            )
-            worker_handler.base_url = (
-                "http://" + cluster_status["handle"].head_ip + f":{port}"
-            )
-            worker_handler.session = aiohttp.ClientSession()
+        if await self.finished_initializing(worker_handler.worker_name):
+            async with self.worker_lock:
+                # Set base_url
+                cluster_statuses = sky.status(cluster_names=None, refresh=False)
+                cluster_status = next(
+                    (
+                        x
+                        for x in cluster_statuses
+                        if x["name"] == worker_handler.worker_name
+                    ),
+                    None,
+                )
+                worker_handler.base_url = (
+                    "http://" + cluster_status["handle"].head_ip + f":{port}"
+                )
+                worker_handler.session = aiohttp.ClientSession()
 
     async def periodic_load_check(self, queue_length_running_mean):
         try:
@@ -192,7 +193,7 @@ class WorkerManager:
                 self.flockserve.logger.debug(f"ready: {worker.ready}")
 
                 if worker.initializing:
-                    if await self.finished_initializing(worker):
+                    if await self.finished_initializing(worker.worker_name):
                         try:
                             await self.setup_initialized_worker(
                                 worker, self.flockserve.port
