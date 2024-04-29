@@ -97,6 +97,12 @@ class FlockServe:
                 "current_queue_length": self.queue_length,
                 "uptime": time.time() - self.start_time,
                 "total_requests": self.total_requests,
+                "worker_names": ",".join(
+                    [
+                        worker.worker_name
+                        for worker in self.worker_manager.worker_handlers
+                    ]
+                ),
             }
 
         @self.app.get("/health")
