@@ -38,6 +38,7 @@ class FlockServe:
         otel_collector_endpoint: str = "http://localhost:4317",
         otel_metrics_exporter_settings: Dict[str, Any] = {},
     ) -> None:
+        self.skypilot_task_path = skypilot_task
         self.skypilot_task = sky.Task.from_yaml(skypilot_task)
         self.worker_capacity = worker_capacity
         self.worker_name_prefix = worker_name_prefix
@@ -109,18 +110,22 @@ class FlockServe:
         async def health_handler():
             return {"status": "healthy"}
 
-        @self.app.get("/remove_existing_node")
-        async def remove_existing_node(request: Request):
+        @self.app.get("/remove_worker")
+        async def remove_worker(request: Request):  # type: ignore
+            """
+            If `worker_name` provided, can remove even the worker at initialization stage
+            """
+
             headers = request.headers
-            node_name = headers.get("node_name", None)
+            worker_name = headers.get("worker_name", None)
             if headers["node_control_key"] == self.node_control_key:
                 try:
-                    if node_name:
+                    if worker_name:
                         await self.worker_manager.delete_worker(
                             [
                                 worker
                                 for worker in self.worker_manager.worker_handlers
-                                if worker.worker_name == node_name
+                                if worker.worker_name == worker_name
                             ][0]
                         )
                     else:
@@ -129,8 +134,7 @@ class FlockServe:
                                 [
                                     worker
                                     for worker in self.worker_manager.worker_handlers
-                                    # FIXIT: worker doesn't have is_initializing anymore
-                                    if not worker.is_initializing
+                                    if not worker.initializing
                                 ],
                                 key=lambda w: w.queue,
                             )
@@ -141,16 +145,25 @@ class FlockServe:
                         status_code=500, detail=f"Error during processing: {e}"
                     )
 
-        @self.app.get("/add_new_node")
-        async def add_new_node(request: Request):
+        @self.app.get("/add_worker")
+        async def add_worker(request: Request):
+            """
+            If a new jobfile and reinit='1', make sure new jobfile has the same cloud resource
+            """
+
             headers = request.headers
-            node_name = headers.get("node_name", None)
+            worker_name = headers.get("worker_name", None)
+            job_file_path = headers.get("job_file_path", None)
+            reinit = True if headers.get("reinit", "0") == "1" else False
             if headers["node_control_key"] == self.node_control_key:
                 try:
                     await self.worker_manager.start_skypilot_worker(
-                        worker_id=self.worker_manager.get_next_worker_id(), reinit=False
+                        worker_id=self.worker_manager.get_next_worker_id(),
+                        worker_name=worker_name,
+                        reinit=reinit,
+                        job_file_path=job_file_path,
                     )
-                    return {"message": "New node added."}
+                    return {"message": "New Worker initialization strted!"}
                 except Exception as e:
                     raise HTTPException(
                         status_code=500, detail=f"Error during processing: {e}"
@@ -230,7 +243,11 @@ class FlockServe:
     def _determine_port(self, port: int) -> int:
         if port < 0:
             try:
-                return int(list(self.skypilot_task.resources)[0].ports[0])
+                return int(
+                    list(sky.Task.from_yaml(self.skypilot_task_path).resources)[
+                        0
+                    ].ports[0]
+                )
             except Exception as e:
                 self.logger.error(f"Couldn't get port from Skypilot task: {e}")
                 raise e  # Or set a default port value

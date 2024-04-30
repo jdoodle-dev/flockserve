@@ -29,42 +29,78 @@ class WorkerManager:
         self.flockserve = flockserve
 
     async def start_skypilot_worker(
-        self, worker_id, worker_type="skypilot", reinit=False
+        self,
+        worker_id,
+        worker_name=None,
+        worker_type="skypilot",
+        reinit=False,
+        job_file_path=None,
     ):
-        worker_name = self.flockserve.worker_name_prefix + "-" + str(worker_id)
+        """
+        Entrypoint for crating a new worker
+
+        Three scenarios this function is called;
+        1. Initial creation of worker -- Allows reinit & autonaming
+        2. Autoscale up -- autonaming
+        3. add_new_node endpoint  -- Allows reinit & Allows custom naming
+
+
+        """
+        if worker_name is None:
+            # If workername is not provided then autonaming
+            worker_name = self.flockserve.worker_name_prefix + "-" + str(worker_id)
+
+        if job_file_path is not None:
+            self.flockserve.skypilot_task_path = job_file_path
+
         self.launcher_sub_process = multiprocessing.Process(
             target=WorkerManager.launch_task_process,
-            args=(worker_name, self.flockserve.skypilot_task, reinit),
-        )
-        self.worker_handlers.append(
-            WorkerHandler(
+            args=(
                 worker_name,
-                worker_type,
-                self.flockserve.worker_capacity,
-                queue_length=0,
-                initializing=True,
-                ready=False,
-            )
+                sky.Task.from_yaml(self.flockserve.skypilot_task_path),
+                reinit,
+            ),
         )
+        print([worker.worker_name for worker in self.worker_handlers])
+
+        if worker_name not in [worker.worker_name for worker in self.worker_handlers]:
+            print(f"{worker_name} not in ..")
+            self.worker_handlers.append(
+                WorkerHandler(
+                    worker_name,
+                    worker_type,
+                    self.flockserve.worker_capacity,
+                    queue_length=0,
+                    initializing=True,
+                    ready=False,
+                )
+            )
         return self.launcher_sub_process.start()
 
     @staticmethod
     def launch_task_process(worker_name, skypilot_task, reinit):
-        if reinit:
-            sky.cancel(cluster_name=worker_name, all=True)
-        # try:
-        if WorkerManager.any_running_jobs(worker_name):
-            # self.logger.info("Job already running, skipping launch.")
-            pass
-        else:
-            sky.launch(skypilot_task, cluster_name=worker_name, retry_until_up=False)
-            print("Sky launch done.")
-        # except Exception as e:
-        #     #pass
-        #     self.logger.info("Error:", e)
+        try:
+            if reinit:
+                sky.cancel(cluster_name=worker_name, all=True)  # type: ignore
+
+            if WorkerManager.any_running_jobs(worker_name):
+                print("Job already running, skip launch.")
+                pass
+
+            else:
+                print("Starting the new worker launching process ")
+                sky.launch(
+                    skypilot_task,
+                    cluster_name=worker_name,  # type: ignore
+                    retry_until_up=False,  # type: ignore
+                    # detach_run=True, #type: ignore -- If True returns as soon as a job is submitted and do not stream execution logs.
+                    # dryrun=True, #type: ignore -- If True Doesn't actually provision
+                )
+        except Exception as e:
+            print("Error in luanch task process\n\n:", e)
 
     async def finished_initializing(self, worker_name: str):
-        cluster_status = sky.status(cluster_names=worker_name, refresh=False)
+        cluster_status = sky.status(cluster_names=worker_name, refresh=False)  # type: ignore
         # cluster_status = next(
         # (x for x in cluster_statuses if x["name"] == worker_handler.worker_name),
         # None,
@@ -88,7 +124,7 @@ class WorkerManager:
 
     @staticmethod
     def worker_exists(worker_name):
-        return len(sky.status(cluster_names=worker_name, refresh=False)) != 0
+        return len(sky.status(cluster_names=worker_name, refresh=False)) != 0  # type: ignore
 
     @staticmethod
     def worker_available(worker: WorkerHandler):
@@ -110,7 +146,7 @@ class WorkerManager:
         if not WorkerManager.worker_exists(worker_name):
             return False
         else:
-            skypilot_job_queue = sky.queue(cluster_name=worker_name)
+            skypilot_job_queue = sky.queue(cluster_name=worker_name)  # type: ignore
             return next(
                 (
                     True
@@ -124,7 +160,7 @@ class WorkerManager:
         if await self.finished_initializing(worker_handler.worker_name):
             async with self.worker_lock:
                 # Set base_url
-                cluster_statuses = sky.status(cluster_names=None, refresh=False)
+                cluster_statuses = sky.status(cluster_names=None, refresh=False)  # type: ignore
                 cluster_status = next(
                     (
                         x
@@ -260,7 +296,7 @@ class WorkerManager:
                         self.flockserve.logger.info(
                             f"Cut the connection session with {worker.worker_name}"
                         )
-                        sky.down(cluster_name=worker.worker_name, purge=True)
+                        sky.down(cluster_name=worker.worker_name, purge=True)  # type: ignore
                         self.flockserve.logger.info(
                             f"Run skydown for {worker.worker_name}"
                         )

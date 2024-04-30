@@ -6,6 +6,13 @@ import time
 import sky
 import json
 
+# TODO: Add test for replacing a node with no downtime through API calls
+
+skypilot_task_file = "examples/serving_tgi_cpu_generate.yaml"
+worker_name = "worker-0"
+skypilot_task = sky.Task.from_yaml(skypilot_task_file)
+
+
 COMMAND = [
     "flockserve",
     "--skypilot_task",
@@ -17,16 +24,46 @@ COMMAND = [
     "--autoscale_down",
     "1",
     "--max_workers",
-    "2",
+    "3",
     "--queue_tracking_window",
     "60",
     "--verbosity",
     "2",
     "--metrics_id",
     "-1",
-    "worker_name_prefix",
+    "--worker_name_prefix",
     "worker",
+    "--node_control_key",
+    "node_control_key",
 ]
+
+# Deactivate autoscaling
+COMMAND2 = [
+    "flockserve",
+    "--skypilot_task",
+    "examples/serving_tgi_cpu_generate.yaml",
+    "--port",
+    "8080",
+    "--autoscale_up",
+    "1000",
+    "--autoscale_down",
+    "-1",
+    "--max_workers",
+    "1",
+    "--min_workers",
+    "0",
+    "--queue_tracking_window",
+    "60",
+    "--verbosity",
+    "2",
+    "--metrics_id",
+    "-1",
+    "--worker_name_prefix",
+    "worker",
+    "--node_control_key",
+    "node_control_key",
+]
+
 
 BASE_URL = "http://localhost:8080"
 TEST_URL = BASE_URL + "/generate"
@@ -83,10 +120,10 @@ def test_build(n_minutes_threshold=20, kill_after_test=True):
     :param kill_after_test:
     :return:
     """
-
     print(" ".join(COMMAND))
     process = subprocess.Popen(COMMAND)
     print(f"PID: {process.pid}")
+    # subprocess.Popen(["kill", "-9", f"{process.pid}"])
 
     start_time = time.perf_counter()
     # If successfull, Either kill the server and return nothing OR not kill the server and return the process
@@ -100,8 +137,10 @@ def test_build(n_minutes_threshold=20, kill_after_test=True):
                 else:
                     return process
             else:
+                print("Worker not ready yet -- Sleeping 10s")
                 time.sleep(10)
-        except:
+        except Exception as e:
+            print(f"Following ex{e}")
             time.sleep(10)
 
         # If not successfull, kill the server and raise an exception
@@ -194,11 +233,61 @@ def test_manual_scaling():
         print(f"Error: {e}")
 
     r = requests.get(
-        "http://localhost:8080/add_new_node", headers={"node_control_key": "tmp123"}
+        "http://localhost:8080/add_worker",
+        headers={"node_control_key": "node_control_key"},
     )
     r = requests.get("http://localhost:8080/")
     r = requests.get("http://localhost:8080/health")
 
 
+def print_summary():
+    r = requests.get("http://localhost:8080/")
+    print(r.json())
+
+
+def test_endpoints():
+    # Case 1: reinit existing worker with same skypilot job file
+    r = requests.get(
+        "http://localhost:8080/add_worker",
+        headers={
+            "node_control_key": "node_control_key",
+            "worker_name": "worker-0",
+            "reinit": "1",
+        },
+    )
+    print(r.text)
+
+    # Case 2: reinit existing worker with a new skypilot job file -- Resource need to match with exitsting one
+    r = requests.get(
+        "http://localhost:8080/add_worker",
+        headers={
+            "node_control_key": "node_control_key",
+            "worker_name": "worker-0",
+            "reinit": "1",
+            "job_file_path": "/home/anil/IdeaProjects/flockserve/examples/serving_tgi_cpu_openai.yaml",
+        },
+    )
+    print(r.text)
+
+    # Case 3: Manual scale up&down
+
+    r = requests.get(
+        "http://localhost:8080/add_worker",
+        headers={
+            "node_control_key": "node_control_key",
+            "worker_name": "worker-12",
+        },
+    )
+
+    # Can scale down even when initializing
+    r = requests.get(
+        "http://localhost:8080/remove_worker",
+        headers={
+            "node_control_key": "node_control_key",
+            "worker_name": "worker-12",
+        },
+    )
+
+
 if __name__ == "__main__":
-    test_flockserve()
+    test_autoscale()
