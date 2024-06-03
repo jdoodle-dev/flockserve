@@ -1,12 +1,15 @@
 """Module for load balancing algorithms."""
+
 import asyncio
 from typing import List
 from flockserve.workermanager import WorkerManager, WorkerHandler
+
 
 class LoadBalancer:
     """
     Base class for a load balancer.
     """
+
     def __init__(self, flockserve):
         self.flockserve = flockserve
 
@@ -19,6 +22,7 @@ class LeastConnectionLoadBalancer(LoadBalancer):
     """
     Selects the worker with the least number of queued tasks.
     """
+
     def __init__(self, flockserve):
         super().__init__(flockserve)
 
@@ -26,7 +30,8 @@ class LeastConnectionLoadBalancer(LoadBalancer):
         """Selects the worker with the least number of connections."""
         while True:
             available_workers: List[WorkerHandler] = [
-                worker for worker in self.flockserve.worker_manager.worker_handlers
+                worker
+                for worker in self.flockserve.worker_manager.worker_handlers
                 if WorkerManager.worker_available(worker)
             ]
             if available_workers:

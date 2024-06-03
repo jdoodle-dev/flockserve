@@ -10,7 +10,7 @@ import json
 import sky
 from flockserve.telemetry import OTLPMetricsGenerator, get_logger
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from flockserve.loadbalancer import LeastConnectionLoadBalancer
 from flockserve.autoscaler import RunningMeanLoadAutoscaler
 from flockserve.utils import time_weighted_mean
@@ -32,12 +32,13 @@ class FlockServe:
         autoscale_up: int = 7,
         autoscale_down: int = 4,
         queue_tracking_window: int = 600,
-        node_control_key: str = None,
+        node_control_key: Optional[str] = None,
         metrics_id: int = 1,
         verbosity: int = 1,  # 0: no logging, 1: info, 2: debug
         otel_collector_endpoint: str = "http://localhost:4317",
         otel_metrics_exporter_settings: Dict[str, Any] = {},
     ) -> None:
+        self.skypilot_task_path = skypilot_task
         self.skypilot_task = sky.Task.from_yaml(skypilot_task)
         self.worker_capacity = worker_capacity
         self.worker_name_prefix = worker_name_prefix
@@ -54,7 +55,7 @@ class FlockServe:
             time.time(): 0
         }  # {timestemp: queuelength at that time}
         self.queue_length_running_mean: float = 0
-        self.app.state.http_client: aiohttp.ClientSession = None
+        self.app.state.http_client = None  # : Optional[aiohttp.ClientSession] -- Type annotation is not supported for attribute references so keeping as comment for our reference
         self.worker_manager = WorkerManager(self)
         self.load_balancer = LeastConnectionLoadBalancer(self)
         self.autoscaler = RunningMeanLoadAutoscaler(
@@ -97,24 +98,34 @@ class FlockServe:
                 "current_queue_length": self.queue_length,
                 "uptime": time.time() - self.start_time,
                 "total_requests": self.total_requests,
+                "worker_names": ",".join(
+                    [
+                        worker.worker_name
+                        for worker in self.worker_manager.worker_handlers
+                    ]
+                ),
             }
 
         @self.app.get("/health")
         async def health_handler():
             return {"status": "healthy"}
 
-        @self.app.get("/remove_existing_node")
-        async def remove_existing_node(request: Request):
+        @self.app.get("/remove_worker")
+        async def remove_worker(request: Request):  # type: ignore
+            """
+            If `worker_name` provided, can remove even the worker at initialization stage
+            """
+
             headers = request.headers
-            node_name = headers.get("node_name", None)
+            worker_name = headers.get("worker_name", None)
             if headers["node_control_key"] == self.node_control_key:
                 try:
-                    if node_name:
+                    if worker_name:
                         await self.worker_manager.delete_worker(
                             [
                                 worker
                                 for worker in self.worker_manager.worker_handlers
-                                if worker.worker_name == node_name
+                                if worker.worker_name == worker_name
                             ][0]
                         )
                     else:
@@ -123,7 +134,7 @@ class FlockServe:
                                 [
                                     worker
                                     for worker in self.worker_manager.worker_handlers
-                                    if not worker.is_initializing
+                                    if not worker.initializing
                                 ],
                                 key=lambda w: w.queue,
                             )
@@ -134,15 +145,33 @@ class FlockServe:
                         status_code=500, detail=f"Error during processing: {e}"
                     )
 
-        @self.app.get("/add_new_node")
-        async def add_new_node(request: Request):
+        @self.app.get("/add_worker")
+        async def add_worker(request: Request):
+            """
+            If a new jobfile and reinit='1', make sure new jobfile has the same cloud resource
+            """
             headers = request.headers
+<<<<<<< HEAD
+            worker_name = headers.get("worker_name", None)
+            job_file_path = headers.get("job_file_path", None)
+            reinit = True if headers.get("reinit", "0") == "1" else False
+            if headers["node_control_key"] == self.node_control_key:
+                try:
+                    await self.worker_manager.start_skypilot_worker(
+                        worker_id=self.worker_manager.get_next_worker_id(),
+                        worker_name=worker_name,
+                        reinit=reinit,
+                        job_file_path=job_file_path,
+                    )
+                    return {"message": "New Worker initialization strted!"}
+=======
             if headers["node_control_key"] == self.node_control_key:
                 try:
                     await self.worker_manager.start_skypilot_worker(
                         worker_id=self.worker_manager.get_next_worker_id(), reinit=False
                     )
                     return {"message": "New node added."}
+>>>>>>> main
                 except Exception as e:
                     raise HTTPException(
                         status_code=500, detail=f"Error during processing: {e}"
@@ -222,7 +251,11 @@ class FlockServe:
     def _determine_port(self, port: int) -> int:
         if port < 0:
             try:
-                return int(list(self.skypilot_task.resources)[0].ports[0])
+                return int(
+                    list(sky.Task.from_yaml(self.skypilot_task_path).resources)[
+                        0
+                    ].ports[0]
+                )
             except Exception as e:
                 self.logger.error(f"Couldn't get port from Skypilot task: {e}")
                 raise e  # Or set a default port value
@@ -355,7 +388,11 @@ class FlockServe:
                             chunk_str = chunk.decode("utf-8")
 
                             # Split the chunk into sentences
+<<<<<<< HEAD
+                            sentences = chunk_str.split(".")
+=======
                             sentences = chunk_str.split("\n")
+>>>>>>> main
 
                             # Update sentence counts
                             for sentence in sentences:
