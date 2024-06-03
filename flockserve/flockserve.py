@@ -151,7 +151,6 @@ class FlockServe:
             If a new jobfile and reinit='1', make sure new jobfile has the same cloud resource
             """
             headers = request.headers
-<<<<<<< HEAD
             worker_name = headers.get("worker_name", None)
             job_file_path = headers.get("job_file_path", None)
             reinit = True if headers.get("reinit", "0") == "1" else False
@@ -164,14 +163,6 @@ class FlockServe:
                         job_file_path=job_file_path,
                     )
                     return {"message": "New Worker initialization strted!"}
-=======
-            if headers["node_control_key"] == self.node_control_key:
-                try:
-                    await self.worker_manager.start_skypilot_worker(
-                        worker_id=self.worker_manager.get_next_worker_id(), reinit=False
-                    )
-                    return {"message": "New node added."}
->>>>>>> main
                 except Exception as e:
                     raise HTTPException(
                         status_code=500, detail=f"Error during processing: {e}"
@@ -388,11 +379,7 @@ class FlockServe:
                             chunk_str = chunk.decode("utf-8")
 
                             # Split the chunk into sentences
-<<<<<<< HEAD
-                            sentences = chunk_str.split(".")
-=======
                             sentences = chunk_str.split("\n")
->>>>>>> main
 
                             # Update sentence counts
                             for sentence in sentences:
