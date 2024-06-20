@@ -19,13 +19,53 @@ def get_logger(verbosity):
     stream_handler = logging.StreamHandler(sys.stdout)
     stream_handler.setLevel(log_level)  # Set the logging level for stdout
     logger.addHandler(stream_handler)
-
     return logger
+
+
+def setup_artifacts(
+    otel_collector_config_path=None, service_acc_key_file=None, skypilot_task=None
+):
+
+    import os
+
+    artifacts_folder_path = os.path.join(
+        os.path.expanduser("~"), "flockserve_artifacts"
+    )
+    if not os.path.exists(artifacts_folder_path):
+        os.makedirs(artifacts_folder_path)
+
+
+def configure_tracing(app):
+    from opentelemetry import trace
+    from opentelemetry.exporter.cloud_trace import CloudTraceSpanExporter
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.propagate import set_global_textmap
+    from opentelemetry.propagators.cloud_trace_propagator import (
+        CloudTraceFormatPropagator,
+    )
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+    tracer_provider = TracerProvider()
+    cloud_trace_exporter = CloudTraceSpanExporter()
+    tracer_provider.add_span_processor(
+        # BatchSpanProcessor buffers spans and sends them in batches in a
+        # background thread. The default parameters are sensible, but can be
+        # tweaked to optimize your performance
+        BatchSpanProcessor(cloud_trace_exporter)
+    )
+    trace.set_tracer_provider(tracer_provider)
+
+    set_global_textmap(CloudTraceFormatPropagator())
+
+    tracer = trace.get_tracer(__name__)
+
+    FastAPIInstrumentor.instrument_app(app)
 
 
 class OTLPMetricsGenerator:
     def __init__(
-        self, metrics_id, otel_collector_endpoint, otel_metrics_exporter_settings
+        self, metrics_id, otel_collector_endpoint, otel_metrics_exporter_settings={}
     ):
         """
         If metrics_id smaller than 0,  then no metrics are generated.

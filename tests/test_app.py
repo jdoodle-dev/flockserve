@@ -49,7 +49,7 @@ COMMAND2 = [
     "--autoscale_down",
     "-1",
     "--max_workers",
-    "1",
+    "3",
     "--min_workers",
     "0",
     "--queue_tracking_window",
@@ -64,6 +64,8 @@ COMMAND2 = [
     "node_control_key",
 ]
 
+# COMMAND = COMMAND
+COMMAND = COMMAND2
 
 BASE_URL = "http://localhost:8080"
 TEST_URL = BASE_URL + "/generate"
@@ -89,11 +91,13 @@ async def send_requests(payloads, url, results_queue):
 def apply_load(url, payload):
     payloads = [payload] * 500
     results_queue = asyncio.Queue()
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(send_requests(payloads, url, results_queue))
+
+    # Running the event loop
+    asyncio.run(send_requests(payloads, url, results_queue))
+
     # Now you can retrieve results from the queue
     while not results_queue.empty():
-        result = loop.run_until_complete(results_queue.get())
+        result = asyncio.run(results_queue.get())
         print(result)
 
 
@@ -145,12 +149,12 @@ def test_build(n_minutes_threshold=20, kill_after_test=True):
 
         # If not successfull, kill the server and raise an exception
         if time.perf_counter() - start_time > 60 * n_minutes_threshold:
-            kill_flockserve_and_clusters()
+            kill_flockserve_and_clusters(process.pid)
             time.sleep(30)
             raise Exception(f"Server did not start in {n_minutes_threshold} minutes")
 
 
-def test_autoscale():
+def test_autoscale(process=None, kill_after_test=True):
     """
     Test the autoscaling feature of the server.
 
@@ -162,15 +166,15 @@ def test_autoscale():
 
     clusters = sky.status()
     if len(clusters) == 0:
-        test_build()
-    elif len(clusters) == 1 and "worker-0" in [
-        worker["name"] for worker in clusters[0]["workers"]
-    ]:
         process = test_build(kill_after_test=False)
+    elif len(clusters) == 1 and process is not None:
+        print(f"using existing process : {process.pid}")
     else:
         kill_flockserve_and_clusters(
             pid=None
         )  # Only kills the clusters as we don't know if flockserve process is running and or PID of it
+
+        process = test_build(kill_after_test=False)
 
     with open("examples/server_test_tgi_generate.json", "r") as f:
         payload = json.load(f)
@@ -217,12 +221,28 @@ def test_autoscale():
 
     # Clean up
     finally:
-        subprocess.Popen(["kill", "-9", f"{process.pid}"])
-        clusters = sky.status()
-        [sky.down(cluster_name=cluster["name"], purge=True) for cluster in clusters]
+        if kill_after_test:
+            subprocess.Popen(["kill", "-9", f"{process.pid}"])
+            clusters = sky.status()
+            [sky.down(cluster_name=cluster["name"], purge=True) for cluster in clusters]
+        else:
+            if process is not None:
+                return process
 
 
-def test_manual_scaling():
+def test_manual_scaling(process=None):
+    clusters = sky.status()
+    if len(clusters) == 0:
+        test_build(kill_after_test=False)
+    elif len(clusters) == 1 and process is not None:
+        print(f"using existing process : {process.pid}")
+    else:
+        kill_flockserve_and_clusters(
+            pid=None
+        )  # Only kills the clusters as we don't know if flockserve process is running and or PID of it
+
+        process = test_build(kill_after_test=False)
+
     with open("examples/server_test_tgi_generate.json", "r") as f:
         payload = json.load(f)
 
@@ -232,12 +252,38 @@ def test_manual_scaling():
     except Exception as e:
         print(f"Error: {e}")
 
-    r = requests.get(
-        "http://localhost:8080/add_worker",
-        headers={"node_control_key": "node_control_key"},
-    )
-    r = requests.get("http://localhost:8080/")
-    r = requests.get("http://localhost:8080/health")
+    worker_name = "manual-created-worker-0"
+    add_new_node_success = False
+
+    try:
+        r = requests.get(
+            BASE_URL + "/add_new_node",
+            headers={
+                "node_control_key": "node_control_key",
+                "worker_name": worker_name,
+            },
+        )
+        print(f"Add_new_node response: {r.text}")
+        r = requests.get("http://localhost:8080/")
+        print(f"/ response: {r.text}")
+
+        if worker_name in r.json()["worker_names"]:
+            print("Succesfully initiated the provisioning of named worker through API")
+            add_new_node_success = True
+        else:
+            print("Failed Test: Couldn't create the named worker through API")
+
+    except Exception as e:
+        print(f"Error: {e}")
+
+    if add_new_node_success:
+        r = requests.get(
+            BASE_URL + "/remove_existing_node",
+            headers={
+                "node_control_key": "node_control_key",
+                "worker_name": worker_name,
+            },
+        )
 
 
 def print_summary():
@@ -245,49 +291,7 @@ def print_summary():
     print(r.json())
 
 
-def test_endpoints():
-    # Case 1: reinit existing worker with same skypilot job file
-    r = requests.get(
-        "http://localhost:8080/add_worker",
-        headers={
-            "node_control_key": "node_control_key",
-            "worker_name": "worker-0",
-            "reinit": "1",
-        },
-    )
-    print(r.text)
-
-    # Case 2: reinit existing worker with a new skypilot job file -- Resource need to match with exitsting one
-    r = requests.get(
-        "http://localhost:8080/add_worker",
-        headers={
-            "node_control_key": "node_control_key",
-            "worker_name": "worker-0",
-            "reinit": "1",
-            "job_file_path": "/home/anil/IdeaProjects/flockserve/examples/serving_tgi_cpu_openai.yaml",
-        },
-    )
-    print(r.text)
-
-    # Case 3: Manual scale up&down
-
-    r = requests.get(
-        "http://localhost:8080/add_worker",
-        headers={
-            "node_control_key": "node_control_key",
-            "worker_name": "worker-12",
-        },
-    )
-
-    # Can scale down even when initializing
-    r = requests.get(
-        "http://localhost:8080/remove_worker",
-        headers={
-            "node_control_key": "node_control_key",
-            "worker_name": "worker-12",
-        },
-    )
-
-
 if __name__ == "__main__":
-    test_autoscale()
+    process = test_build(n_minutes_threshold=20, kill_after_test=False)
+    test_autoscale(process)
+    test_manual_scaling(process)

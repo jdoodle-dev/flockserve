@@ -1,6 +1,5 @@
 import sqlite3
 
-
 """Module for connecting to a database and storing request and response content."""
 
 
@@ -19,7 +18,7 @@ class SQLiteConnector(DatabaseConnector):
     It will create a new database if the database does not exist.
     """
 
-    def __init__(self, db_name="flockserve.db", table_name="requests", extra_schema={}):
+    def __init__(self,db_name='flockserve.db', table_name='requests', extra_schema={}):
         """
         If changing the schema using extra_schema, make sure db_name or path is changed as well so a new db is created. Otherwise the old schema will be used and a new db won't be created.
         """
@@ -28,10 +27,10 @@ class SQLiteConnector(DatabaseConnector):
 
         # Define the schema as a dictionary
         default_schema = {
-            "id": "INTEGER PRIMARY KEY",
-            "timestamp": "TEXT",
-            "request": "TEXT",
-            "response": "TEXT",
+            "id"            : "INTEGER PRIMARY KEY",
+            "timestamp"     : "TEXT",
+            "request"       : "TEXT",
+            "response"      : "TEXT",
             "execution_time": "REAL",
         }
 
@@ -49,27 +48,24 @@ class SQLiteConnector(DatabaseConnector):
             # Execute the sql statement
             cursor.execute(sql, *args, **kwargs)
 
+
     def _create_table(self):
         """Create a table in the database."""
 
         # Convert the schema into a SQL statement
-        columns_sql = ", ".join(
-            [f"{col_name} {data_type}" for col_name, data_type in self.schema.items()]
-        )
-        create_table_sql = (
-            f"CREATE TABLE IF NOT EXISTS {self.table_name} ({columns_sql});"
-        )
+        columns_sql = ', '.join([f"{col_name} {data_type}" for col_name, data_type in self.schema.items()])
+        create_table_sql = f"CREATE TABLE IF NOT EXISTS {self.table_name} ({columns_sql});"
 
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
             # Execute the sql statement
             cursor.execute(create_table_sql)
 
+
+
     async def add_new_column(self, column_name, data_type):
         """Add a new column to the table."""
-        await self.execute(
-            f"ALTER TABLE {self.table_name} ADD COLUMN {column_name} {data_type};"
-        )
+        await self.execute(f"ALTER TABLE {self.table_name} ADD COLUMN {column_name} {data_type};")
 
     async def insert(self, data_dict):
         """Insert a row or multiple rows into a table."""
@@ -77,22 +73,18 @@ class SQLiteConnector(DatabaseConnector):
         # To insert single row
         if type(data_dict) == dict:
             # Dynamically construct the INSERT INTO statement
-            columns = ", ".join(data_dict.keys())
-            placeholders = ", ".join(["?" for _ in data_dict])
-            insert_sql = (
-                f"INSERT INTO {self.table_name} ({columns}) VALUES ({placeholders});"
-            )
+            columns = ', '.join(data_dict.keys())
+            placeholders = ', '.join(['?' for _ in data_dict])
+            insert_sql = f"INSERT INTO {self.table_name} ({columns}) VALUES ({placeholders});"
 
             await self.execute(insert_sql, list(data_dict.values()))
 
         # To insert multiple rows at once
         elif type(data_dict) == list:
             # Ensure all dictionaries have the same keys/columns
-            columns = ", ".join(data_dict[0].keys())
-            placeholders = ", ".join(["?" for _ in data_dict[0]])
-            insert_sql = (
-                f"INSERT INTO {self.table_name} ({columns}) VALUES ({placeholders});"
-            )
+            columns = ', '.join(data_dict[0].keys())
+            placeholders = ', '.join(['?' for _ in data_dict[0]])
+            insert_sql = f"INSERT INTO {self.table_name} ({columns}) VALUES ({placeholders});"
 
             # Prepare the list of tuples from the dictionaries
             values_to_insert = [tuple(data.values()) for data in data_dict]
@@ -102,3 +94,6 @@ class SQLiteConnector(DatabaseConnector):
                 cursor = conn.cursor()
                 # Use executemany to insert all rows
                 cursor.executemany(insert_sql, values_to_insert)
+
+
+

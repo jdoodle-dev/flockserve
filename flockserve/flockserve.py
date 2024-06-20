@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from typing import Optional
 import time
 import aiohttp
 from fastapi import FastAPI, HTTPException, Request
@@ -8,9 +9,14 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 import uvicorn
 import json
 import sky
-from flockserve.telemetry import OTLPMetricsGenerator, get_logger
+from flockserve.telemetry import (
+    OTLPMetricsGenerator,
+    get_logger,
+    setup_artifacts,
+    configure_tracing,
+)
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from flockserve.loadbalancer import LeastConnectionLoadBalancer
 from flockserve.autoscaler import RunningMeanLoadAutoscaler
 from flockserve.utils import time_weighted_mean
@@ -36,10 +42,16 @@ class FlockServe:
         metrics_id: int = 1,
         verbosity: int = 1,  # 0: no logging, 1: info, 2: debug
         otel_collector_endpoint: str = "http://localhost:4317",
-        otel_metrics_exporter_settings: Dict[str, Any] = {},
+        reinit: bool = False,
+        # otel_collector_config_path: str = 'examples/config.yaml',
+        # service_acc_key_file: str = 'examples/gcp_service_acc_keyfile.json',
     ) -> None:
-        self.skypilot_task_path = skypilot_task
-        self.skypilot_task = sky.Task.from_yaml(skypilot_task)
+
+        setup_artifacts()
+
+        self.skypilot_task = skypilot_task  # sky.Task.from_yaml(skypilot_task)
+        self.skypilot_task2 = sky.Task.from_yaml(skypilot_task)
+
         self.worker_capacity = worker_capacity
         self.worker_name_prefix = worker_name_prefix
         self.host = host
@@ -49,13 +61,14 @@ class FlockServe:
         self.node_control_key = node_control_key
 
         self.app: FastAPI = FastAPI()
-        FastAPIInstrumentor.instrument_app(self.app)
+        configure_tracing(self.app)
+
         self.queue_length: int = 0
         self.queue_tracker: Dict[float, int] = {
             time.time(): 0
         }  # {timestemp: queuelength at that time}
         self.queue_length_running_mean: float = 0
-        self.app.state.http_client = None  # : Optional[aiohttp.ClientSession] -- Type annotation is not supported for attribute references so keeping as comment for our reference
+        self.app.state.http_client: aiohttp.ClientSession = None
         self.worker_manager = WorkerManager(self)
         self.load_balancer = LeastConnectionLoadBalancer(self)
         self.autoscaler = RunningMeanLoadAutoscaler(
@@ -68,7 +81,6 @@ class FlockServe:
         self.metrics = OTLPMetricsGenerator(
             metrics_id=metrics_id,
             otel_collector_endpoint=otel_collector_endpoint,
-            otel_metrics_exporter_settings=otel_metrics_exporter_settings,
         )
         self.logger = get_logger(verbosity)
         self.start_time = time.time()
@@ -83,11 +95,12 @@ class FlockServe:
                 "request__language": "TEXT",
                 "request__inputs": "TEXT",
                 "request__inputs2": "TEXT",
-                "response__status": "TEXT",
-                "response__content": "TEXT",
+                "request__IP": "TEXT",
+                "stream": "TEXT",
             },
         )
         self.insert_dicts = []
+        self.reinit = reinit
 
         @self.app.get("/")
         async def root_handler():
@@ -110,12 +123,8 @@ class FlockServe:
         async def health_handler():
             return {"status": "healthy"}
 
-        @self.app.get("/remove_worker")
-        async def remove_worker(request: Request):  # type: ignore
-            """
-            If `worker_name` provided, can remove even the worker at initialization stage
-            """
-
+        @self.app.get("/remove_existing_node")
+        async def remove_existing_node(request: Request):
             headers = request.headers
             worker_name = headers.get("worker_name", None)
             if headers["node_control_key"] == self.node_control_key:
@@ -134,7 +143,7 @@ class FlockServe:
                                 [
                                     worker
                                     for worker in self.worker_manager.worker_handlers
-                                    if not worker.initializing
+                                    if not worker.is_initializing
                                 ],
                                 key=lambda w: w.queue,
                             )
@@ -144,43 +153,48 @@ class FlockServe:
                     raise HTTPException(
                         status_code=500, detail=f"Error during processing: {e}"
                     )
+            else:
+                return {"message": "Incorrect key"}
 
-        @self.app.get("/add_worker")
-        async def add_worker(request: Request):
-            """
-            If a new jobfile and reinit='1', make sure new jobfile has the same cloud resource
-            """
+        @self.app.get("/add_new_node")
+        async def add_new_node(request: Request):
             headers = request.headers
-            worker_name = headers.get("worker_name", None)
-            job_file_path = headers.get("job_file_path", None)
-            reinit = True if headers.get("reinit", "0") == "1" else False
+            worker_name = headers.get(
+                "worker_name", self.worker_manager.get_next_worker_id()
+            )
             if headers["node_control_key"] == self.node_control_key:
                 try:
                     await self.worker_manager.start_skypilot_worker(
-                        worker_id=self.worker_manager.get_next_worker_id(),
-                        worker_name=worker_name,
-                        reinit=reinit,
-                        job_file_path=job_file_path,
+                        worker_id=worker_name, reinit=False
                     )
-                    return {"message": "New Worker initialization strted!"}
+                    return {"message": "New node added."}
                 except Exception as e:
                     raise HTTPException(
                         status_code=500, detail=f"Error during processing: {e}"
                     )
 
+            else:
+                return {"message": "Incorrect key"}
+
         @self.app.on_event("startup")
         async def on_startup():
             await self.init_session()
-            await self.worker_manager.start_skypilot_worker(worker_id=0, reinit=False)
+            await self.worker_manager.start_skypilot_worker(
+                worker_id=0, reinit=self.reinit
+            )
+            self.logger.debug("!!!Startup task passed await!!!")
+
             asyncio.create_task(self.set_queue_tracker())
             asyncio.create_task(self.run_periodic_load_check())
             asyncio.create_task(self.worker_manager.periodic_worker_check())
             asyncio.create_task(self.run_periodic_db_inserts())
+            self.logger.debug("!!!Startup completed!!!")
 
         @self.app.on_event("shutdown")
         async def on_shutdown():
             await self.close_session()
             await self.worker_manager.shutdown_workers()
+            self.logger.debug("!!!Shutdown completed!!!")
 
         @self.app.api_route(
             "/{full_path:path}", methods=["GET", "POST", "PUT", "DELETE"]
@@ -197,7 +211,7 @@ class FlockServe:
                         )
                     else:
                         s = time.perf_counter()
-                        response = await self.handle_inference_request(
+                        response, worker_url = await self.handle_inference_request(
                             data, headers, f"/{full_path}"
                         )
                         e = time.perf_counter()
@@ -216,9 +230,13 @@ class FlockServe:
                                 "request__language": incoming_req.get("language", ""),
                                 "request__inputs": incoming_req.get("inputs", ""),
                                 "request__inputs2": incoming_req.get("outputs", ""),
+                                "request__IP": worker_url,
+                                "stream": "No",
                             }
                         )
+
                         return response
+
                 except Exception as e:
                     raise HTTPException(
                         status_code=500, detail=f"Error during processing: {e}"
@@ -228,12 +246,13 @@ class FlockServe:
                 try:
                     if stream == "1":
                         return StreamingResponse(
-                            self.handle_stream_request(data, headers, f"/{full_path}")
+                            self.handle_stream_request2(data, headers, f"/{full_path}")
                         )
                     else:
-                        return await self.handle_inference_request(
+                        response, worker_url = await self.handle_inference_request(
                             data, headers, f"/{full_path}"
                         )
+                        return response
                 except Exception as e:
                     raise HTTPException(
                         status_code=500, detail=f"Error during processing: {e}"
@@ -242,11 +261,7 @@ class FlockServe:
     def _determine_port(self, port: int) -> int:
         if port < 0:
             try:
-                return int(
-                    list(sky.Task.from_yaml(self.skypilot_task_path).resources)[
-                        0
-                    ].ports[0]
-                )
+                return int(list(self.skypilot_task2.resources)[0].ports[0])
             except Exception as e:
                 self.logger.error(f"Couldn't get port from Skypilot task: {e}")
                 raise e  # Or set a default port value
@@ -313,7 +328,7 @@ class FlockServe:
                         data=data,
                         headers=headers,
                     ) as response:
-                        result = await response.text()
+                        result = await response.json()
                         end = time.perf_counter()
                         if end - start > 30:
                             self.logger.warning(
@@ -321,7 +336,7 @@ class FlockServe:
                                 f"Input: {data.decode('utf-8')}"
                                 f"Output: {result}"
                             )
-                        return result
+                        return result, selected_worker.base_url
                 except Exception as e:
                     self.logger.error(
                         f"Error handling request for worker {selected_worker.base_url}: {e}"
@@ -334,7 +349,7 @@ class FlockServe:
                 async with self.app.state.http_client.get(
                     f"{selected_worker.base_url}/", headers=headers
                 ) as response:
-                    result = await response.text()
+                    result = await response.json()
             else:
                 return None
         except Exception as e:
@@ -342,24 +357,10 @@ class FlockServe:
                 f"Error handling request for worker {selected_worker.base_url}: {e}"
             )
             raise
-        return result
-
-    async def handle_stream_request(self, data: bytes, headers, endpoint_path: str):
-        selected_worker = await self.load_balancer.select_worker()
-
-        async with self.app.state.http_client.post(
-            f"{selected_worker.base_url}{endpoint_path}",
-            json=json.loads(data.decode("utf-8")),
-            headers=headers,
-            timeout=None,
-        ) as response:
-            # Check if the response status is OK
-            if response.status == 200:
-                async for chunk in response.content.iter_any():
-                    if chunk:
-                        yield chunk
+        return result, selected_worker.base_url
 
     async def handle_stream_request2(self, data: bytes, headers, endpoint_path: str):
+        s = time.perf_counter()
         selected_worker = await self.load_balancer.select_worker()
         sentence_counts = {}  # Dictionary to track the occurrences of each sentence
 
@@ -396,7 +397,26 @@ class FlockServe:
                                         print(f"Stopping stream: {sentence}")
                                         return
 
-                        yield chunk
+                        yield chunk.decode("utf-8")
+
+                e = time.perf_counter()
+                incoming_req = json.loads(data.decode("utf-8"))
+                self.insert_dicts.append(
+                    {
+                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "execution_time": round(e - s, 2),
+                        "request": json.dumps(incoming_req),
+                        "response": chunk.decode("utf-8"),
+                        "user": incoming_req.get("user", ""),
+                        "platform": incoming_req.get("platform", ""),
+                        "request__task": incoming_req.get("task", ""),
+                        "request__language": incoming_req.get("language", ""),
+                        "request__inputs": incoming_req.get("inputs", ""),
+                        "request__inputs2": incoming_req.get("outputs", ""),
+                        "request__IP": selected_worker.base_url,
+                        "stream": "Yes",
+                    }
+                )
 
     def run(self):
         uvicorn.run(self.app, host=self.host, port=self.port, timeout_keep_alive=5)
