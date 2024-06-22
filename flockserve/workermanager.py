@@ -6,7 +6,7 @@ import multiprocessing
 from dataclasses import dataclass, field
 from typing import Optional
 import sky
-from flockserve.utils import record_metrics
+from .utils import record_metrics
 
 
 @dataclass
