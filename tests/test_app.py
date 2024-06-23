@@ -101,6 +101,15 @@ def apply_load(url, payload):
         print(result)
 
 
+def sequantial_req():
+    with open("examples/server_test_tgi_generate.json", "r") as f:
+        payload = json.load(f)
+
+    # Apply load to the server and check if it scales up and down
+    r = requests.post(TEST_URL, json=payload)
+    print(r.text)
+
+
 def kill_flockserve_and_clusters(pid=None):
     while True:
         try:
@@ -230,7 +239,7 @@ def test_autoscale(process=None, kill_after_test=True):
                 return process
 
 
-def test_manual_scaling(process=None):
+def test_manual_scaling(process=None, kill_after_test=True):
     clusters = sky.status()
     if len(clusters) == 0:
         test_build(kill_after_test=False)
@@ -265,7 +274,7 @@ def test_manual_scaling(process=None):
         )
         print(f"Add_new_node response: {r.text}")
         r = requests.get("http://localhost:8080/")
-        print(f"/ response: {r.text}")
+        print(f"response: {r.text}")
 
         if worker_name in r.json()["worker_names"]:
             print("Succesfully initiated the provisioning of named worker through API")
@@ -276,14 +285,25 @@ def test_manual_scaling(process=None):
     except Exception as e:
         print(f"Error: {e}")
 
-    if add_new_node_success:
-        r = requests.get(
-            BASE_URL + "/remove_existing_node",
-            headers={
-                "node_control_key": "node_control_key",
-                "worker_name": worker_name,
-            },
-        )
+    try:
+
+        if add_new_node_success:
+            r = requests.get(
+                BASE_URL + "/remove_existing_node",
+                headers={
+                    "node_control_key": "node_control_key",
+                    "worker_name": "worker-" + worker_name,
+                },
+            )
+    # Clean up
+    finally:
+        if kill_after_test:
+            subprocess.Popen(["kill", "-9", f"{process.pid}"])
+            clusters = sky.status()
+            [sky.down(cluster_name=cluster["name"], purge=True) for cluster in clusters]
+        else:
+            if process is not None:
+                return process
 
 
 def print_summary():
