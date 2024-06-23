@@ -9,7 +9,7 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 import uvicorn
 import json
 import sky
-from flockserve.telemetry import (
+from .telemetry import (
     OTLPMetricsGenerator,
     get_logger,
     setup_artifacts,
@@ -17,11 +17,12 @@ from flockserve.telemetry import (
 )
 
 from typing import Dict, Any
-from flockserve.loadbalancer import LeastConnectionLoadBalancer
-from flockserve.autoscaler import RunningMeanLoadAutoscaler
-from flockserve.utils import time_weighted_mean
-from flockserve.workermanager import WorkerManager
-from flockserve.database_connector import SQLiteConnector
+from .loadbalancer import LeastConnectionLoadBalancer
+from .autoscaler import RunningMeanLoadAutoscaler
+from .utils import time_weighted_mean
+from .workermanager import WorkerManager
+from .database_connector import SQLiteConnector
+from .utils import truncate_repetition, frequency_based_truncate_repetition
 
 
 class FlockServe:
@@ -358,6 +359,92 @@ class FlockServe:
             )
             raise
         return result, selected_worker.base_url
+
+    async def handle_stream_request3(self, data: bytes, headers, endpoint_path: str):
+        s = time.perf_counter()
+        selected_worker = await self.load_balancer.select_worker()
+
+        def _record(return_chunk):
+            e = time.perf_counter()
+            incoming_req = json.loads(data.decode("utf-8"))
+            self.insert_dicts.append(
+                {
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "execution_time": round(e - s, 2),
+                    "request": json.dumps(incoming_req),
+                    "response": return_chunk,
+                    "user": incoming_req.get("user", ""),
+                    "platform": incoming_req.get("platform", ""),
+                    "request__task": incoming_req.get("task", ""),
+                    "request__language": incoming_req.get("language", ""),
+                    "request__inputs": incoming_req.get("inputs", ""),
+                    "request__inputs2": incoming_req.get("outputs", ""),
+                    "request__IP": selected_worker.base_url,
+                    "stream": "Yes",
+                }
+            )
+
+        async with self.app.state.http_client.post(
+            f"{selected_worker.base_url}{endpoint_path}",
+            json=json.loads(data.decode("utf-8")),
+            headers=headers,
+            timeout=None,
+        ) as response:
+            i = 0
+            if response.status == 200:
+                async for chunk in response.content.iter_any():
+                    i += 1
+                    if chunk:
+                        print(f"received chunk: {chunk}")
+                        if ((i + 1) % 100) == 0:
+                            # Decode chunk to string
+                            chunk_str = chunk.decode("utf-8")
+                            processed_chunk, truncated = truncate_repetition(
+                                chunk_str, threshold=100, level="char"
+                            )
+                            if truncated:
+                                _record(processed_chunk)
+                                yield processed_chunk
+                                return
+
+                            processed_chunk, truncated = truncate_repetition(
+                                chunk_str, threshold=20, level="word"
+                            )
+                            if truncated:
+                                _record(processed_chunk)
+                                yield processed_chunk
+                                return
+
+                            processed_chunk, truncated = truncate_repetition(
+                                chunk_str, threshold=10, level="sentence"
+                            )
+                            if truncated:
+                                _record(processed_chunk)
+                                yield processed_chunk
+                                return
+                            processed_chunk, truncated = (
+                                frequency_based_truncate_repetition(
+                                    chunk_str, threshold=100, level="word"
+                                )
+                            )
+                            if truncated:
+                                _record(processed_chunk)
+                                yield processed_chunk
+                                return
+
+                            processed_chunk, truncated = (
+                                frequency_based_truncate_repetition(
+                                    chunk_str, threshold=20, level="sentence"
+                                )
+                            )
+                            if truncated:
+                                _record(processed_chunk)
+                                yield processed_chunk
+                                return
+
+                        yield chunk.decode("utf-8")
+
+                _record(chunk.decode("utf-8"))
 
     async def handle_stream_request2(self, data: bytes, headers, endpoint_path: str):
         s = time.perf_counter()
