@@ -1,5 +1,40 @@
 import pandas as pd
 from itertools import groupby
+from thefuzz import fuzz
+
+
+def redundant_code_validator(text, fuzz_ratio_threshold):
+    sentences = text.split("\n")
+    # print("len(sentences): ", len(sentences))
+    filtered_sentences = []
+    redundant_sentences = []
+    sentence = sentences[0]
+    other_sentences = sentences[1:]
+    while len(other_sentences):
+        # Check fuzzy match against all other sentences
+        filtered_sentences.append(sentence)
+        unique_sentences = []
+
+        for other_sentence in other_sentences:
+            ratio = fuzz.ratio(sentence, other_sentence)
+            if ratio > fuzz_ratio_threshold:
+                redundant_sentences.append(other_sentence)
+            else:
+                unique_sentences.append(other_sentence)
+        if len(unique_sentences) == 0:
+            break
+
+        sentence = unique_sentences[0]
+        other_sentences = unique_sentences[1:]
+    filtered_summary = "\n".join(filtered_sentences)
+    # print("filtered sentences count", len(filtered_sentences))
+    # print("redundant sentences count", len(redundant_sentences))
+    # print("unique sentences count", len(unique_sentences))
+    if redundant_sentences:
+
+        return filtered_summary, True
+    else:
+        return text, False
 
 
 def time_weighted_mean(queue_tracker):
@@ -26,7 +61,7 @@ def record_metrics(meters, records):
             continue
 
 
-def truncate_repetition(text, threshold=2, level="char"):
+def truncate_repetition(text, threshold=2, item_len_threshold=3, level="char"):
     """
     Below is how the itertools.groupby behaves
 
@@ -50,15 +85,19 @@ def truncate_repetition(text, threshold=2, level="char"):
     truncated = False
     for item, grouped_items in groupby(items):
 
-        # don't consider white spaces as words and let char_level check consider it as it would potenitaly have much larger threshold
-        if level != "char" and item == "":
-            # break
-            continue
-
         cluster = list(grouped_items)
         if len(cluster) <= threshold:
             new_items.extend(cluster)
         else:
+            # Should repeating items must have at least item_len_threshold to be considered as a repetition
+            if len(item) < item_len_threshold and level != "char":
+                new_items.extend(cluster)
+                continue
+            # don't consider white spaces as words and let char_level check consider it as it would potenitaly have much larger threshold
+            if level == "char" and item == "":
+                new_items.extend(cluster)
+                continue
+
             new_items.extend(cluster[:threshold])
             truncated = True
             break
@@ -68,7 +107,7 @@ def truncate_repetition(text, threshold=2, level="char"):
     elif level == "word":
         return " ".join(new_items), truncated
     elif level == "sentence":
-        return "\n".join(new_items), truncated
+        return "\\n".join(new_items), truncated
 
 
 def frequency_based_truncate_repetition(text, threshold=5, level="char"):

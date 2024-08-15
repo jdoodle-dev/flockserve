@@ -22,7 +22,11 @@ from .autoscaler import RunningMeanLoadAutoscaler
 from .utils import time_weighted_mean
 from .workermanager import WorkerManager
 from .database_connector import SQLiteConnector
-from .utils import truncate_repetition, frequency_based_truncate_repetition
+from .utils import (
+    truncate_repetition,
+    frequency_based_truncate_repetition,
+    redundant_code_validator,
+)
 
 
 class FlockServe:
@@ -208,7 +212,7 @@ class FlockServe:
                 try:
                     if stream == "1":
                         return StreamingResponse(
-                            self.handle_stream_request2(data, headers, f"/{full_path}")
+                            self.handle_stream_request3(data, headers, f"/{full_path}")
                         )
                     else:
                         s = time.perf_counter()
@@ -222,9 +226,9 @@ class FlockServe:
                         self.insert_dicts.append(
                             {
                                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                                "execution_time": round(e - s, 2),
-                                "request": json.dumps(incoming_req),
-                                "response": response,
+                                # "execution_time": round(e - s, 2),
+                                # "request": json.dumps(incoming_req),
+                                "response": str(response),
                                 "user": incoming_req.get("user", ""),
                                 "platform": incoming_req.get("platform", ""),
                                 "request__task": incoming_req.get("task", ""),
@@ -247,7 +251,7 @@ class FlockServe:
                 try:
                     if stream == "1":
                         return StreamingResponse(
-                            self.handle_stream_request2(data, headers, f"/{full_path}")
+                            self.handle_stream_request3(data, headers, f"/{full_path}")
                         )
                     else:
                         response, worker_url = await self.handle_inference_request(
@@ -370,8 +374,8 @@ class FlockServe:
             self.insert_dicts.append(
                 {
                     "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "execution_time": round(e - s, 2),
-                    "request": json.dumps(incoming_req),
+                    # "execution_time": round(e - s, 2),
+                    # "request": json.dumps(incoming_req),
                     "response": return_chunk,
                     "user": incoming_req.get("user", ""),
                     "platform": incoming_req.get("platform", ""),
@@ -395,53 +399,18 @@ class FlockServe:
                 async for chunk in response.content.iter_any():
                     i += 1
                     if chunk:
-                        print(f"received chunk: {chunk}")
+                        # print(f"received chunk: {chunk}")
                         if ((i + 1) % 100) == 0:
                             # Decode chunk to string
                             chunk_str = chunk.decode("utf-8")
-                            processed_chunk, truncated = truncate_repetition(
-                                chunk_str, threshold=100, level="char"
-                            )
-                            if truncated:
-                                _record(processed_chunk)
-                                yield processed_chunk
-                                return
-
-                            processed_chunk, truncated = truncate_repetition(
-                                chunk_str, threshold=20, level="word"
-                            )
-                            if truncated:
-                                _record(processed_chunk)
-                                yield processed_chunk
-                                return
-
-                            processed_chunk, truncated = truncate_repetition(
-                                chunk_str, threshold=10, level="sentence"
-                            )
-                            if truncated:
-                                _record(processed_chunk)
-                                yield processed_chunk
-                                return
-                            processed_chunk, truncated = (
-                                frequency_based_truncate_repetition(
-                                    chunk_str, threshold=100, level="word"
+                            if len(chunk_str) > 20000:
+                                processed_chunk, truncated = redundant_code_validator(
+                                    chunk_str, fuzz_ratio_threshold=90
                                 )
-                            )
-                            if truncated:
-                                _record(processed_chunk)
-                                yield processed_chunk
-                                return
-
-                            processed_chunk, truncated = (
-                                frequency_based_truncate_repetition(
-                                    chunk_str, threshold=20, level="sentence"
-                                )
-                            )
-                            if truncated:
-                                _record(processed_chunk)
-                                yield processed_chunk
-                                return
-
+                                if truncated:
+                                    _record(processed_chunk)
+                                    yield processed_chunk
+                                    return
                         yield chunk.decode("utf-8")
 
                 _record(chunk.decode("utf-8"))
@@ -491,8 +460,8 @@ class FlockServe:
                 self.insert_dicts.append(
                     {
                         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                        "execution_time": round(e - s, 2),
-                        "request": json.dumps(incoming_req),
+                        # "execution_time": round(e - s, 2),
+                        # "request": json.dumps(incoming_req),
                         "response": chunk.decode("utf-8"),
                         "user": incoming_req.get("user", ""),
                         "platform": incoming_req.get("platform", ""),

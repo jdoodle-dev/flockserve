@@ -20,6 +20,7 @@ requirements = [
     "opentelemetry-instrumentation-fastapi",
     "uvicorn",
     "fire",
+    "thefuzz",
 ]
 
 test_requirements = [
