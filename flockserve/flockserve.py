@@ -192,6 +192,8 @@ class FlockServe:
             asyncio.create_task(self.set_queue_tracker())
             asyncio.create_task(self.run_periodic_load_check())
             asyncio.create_task(self.worker_manager.periodic_worker_check())
+            asyncio.create_task(self.worker_manager.health_history_check())
+
             asyncio.create_task(self.run_periodic_db_inserts())
             self.logger.debug("!!!Startup completed!!!")
 
@@ -335,7 +337,7 @@ class FlockServe:
                     ) as response:
                         result = await response.json()
                         end = time.perf_counter()
-                        if end - start > 30:
+                        if end - start > 1200000:
                             self.logger.warning(
                                 f"Time taken for inference: {end - start}"
                                 f"Input: {data.decode('utf-8')}"

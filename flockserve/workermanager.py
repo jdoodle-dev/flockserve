@@ -4,9 +4,11 @@ import asyncio
 import aiohttp
 import multiprocessing
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Dict, List
 import sky
-from .utils import record_metrics
+from .utils import record_metrics, is_health_failed
+import time
+import logging
 
 
 @dataclass
@@ -16,9 +18,16 @@ class WorkerHandler:
     capacity: int
     queue_length: int = 0
     initializing: bool = True
+    post_initialization_done: bool = False
     ready: bool = False
     session: Optional[aiohttp.ClientSession] = field(default=None, init=False)
     base_url: Optional[str] = None
+    # NOTE: assuming there wouldn't be any need for lock when modifying this field as one part of the code modifying health records while other part modifying/reading wouldn't be a problem
+    health_records: List[tuple] = field(
+        default_factory=list
+    )  # [(timestemp, readiness)]    -1: initializing, 0: Setup phase      1: not healthy,     2:healthy
+    initialization_time = time.time()
+
     # handle: Optional[Any] = None
 
 
@@ -70,7 +79,7 @@ class WorkerManager:
             print("Sky launch done.")
         # except Exception as e:
         #     #pass
-        #     self.logger.info("Error:", e)
+        #     print("Error:", e)
 
     async def finished_initializing(self, worker_handler: WorkerHandler):
         cluster_statuses = sky.status(cluster_names=None, refresh=False)
@@ -203,25 +212,31 @@ class WorkerManager:
                     self.flockserve.logger.debug(f"ready: {worker.ready}")
 
                     if worker.initializing:
+                        worker.health_records.append(
+                            (time.time(), -1)
+                        )  # Still initializing
                         if await self.finished_initializing(worker):
-                            try:
-                                await self.setup_initialized_worker(
-                                    worker, self.flockserve.port
-                                )
-                                worker.initializing = False
-                                self.flockserve.logger.info(
-                                    f"Worker: {worker.worker_name}, "
-                                    f"initialization completed: {worker.base_url}"
-                                )
-                            except Exception as e:
-                                worker.initializing = True
-                                self.flockserve.logger.info(
-                                    f"Error during initialization : {e}"
-                                )
+
+                            async with self.worker_lock:
+                                try:
+                                    await self.setup_initialized_worker(
+                                        worker, self.flockserve.port
+                                    )
+                                    worker.initializing = False
+                                    self.flockserve.logger.info(
+                                        f"Worker: {worker.worker_name}, "
+                                        f"initialization completed: {worker.base_url}"
+                                    )
+                                except Exception as e:
+                                    worker.initializing = True
+                                    self.flockserve.logger.info(
+                                        f"Error during initialization : {e}"
+                                    )
 
                     else:
                         try:
                             if await self.worker_ready(worker):
+                                worker.health_records.append((time.time(), 1))
                                 if not (worker.ready):
                                     worker.ready = True
 
@@ -233,6 +248,7 @@ class WorkerManager:
                                     {"readiness_meter": 1},
                                 )
                             else:
+                                worker.health_records.append((time.time(), 0))
                                 self.flockserve.logger.info(
                                     f"Worker not ready: {worker.worker_name} "
                                 )
@@ -249,6 +265,45 @@ class WorkerManager:
                 except Exception as e:
                     self.flockserve.logger.info(f"Error during health check : {e}")
             await asyncio.sleep(30)
+
+    async def health_history_check(self):
+        while True:
+            for worker in list(self.worker_handlers):
+                self.flockserve.logger.debug("=" * 50)
+                self.flockserve.logger.debug(f"Worker Name: {worker.worker_name}")
+                self.flockserve.logger.debug("=" * 50)
+                if self.flockserve.logger.getEffectiveLevel() <= logging.DEBUG:
+                    self.flockserve.logger.debug(f"Worker health records below: ")
+                    for record in worker.health_records:
+                        self.flockserve.logger.debug(record)
+
+                # initilization check
+                if (
+                    time.time() - worker.initialization_time > 30 * 60
+                ):  # If worker started to be provisioned just 20mins ago don't take any action
+                    if (
+                        worker.initializing
+                    ):  # If initializing for more than 15minutes then kill
+                        self.flockserve.logger.info("=" * 50)
+                        self.flockserve.logger.info(
+                            f"Initialization failed for {worker.worker_name}"
+                        )
+                        self.flockserve.logger.info("=" * 50)
+                        await self.delete_worker(worker)
+                    # Consider this only after initial search for a worker started 20mins ago -- thats why elif and not if
+                    elif is_health_failed(worker.health_records):
+                        self.flockserve.logger.info("=" * 50)
+                        self.flockserve.logger.info(
+                            f"Health history Failed for {worker.worker_name}"
+                        )
+                        self.flockserve.logger.info("=" * 50)
+                        await self.delete_worker(worker)
+                    worker.health_records = [
+                        rec
+                        for rec in worker.health_records
+                        if time.time() - rec[0] < 30 * 60
+                    ]  # Remove entries older than 30mins
+            await asyncio.sleep(60)
 
     def get_next_worker_id(self):
         existing_worker_names = [w.worker_name for w in self.worker_handlers]

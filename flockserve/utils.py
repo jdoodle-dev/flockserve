@@ -1,6 +1,26 @@
 import pandas as pd
 from itertools import groupby
 from thefuzz import fuzz
+import time
+
+
+def is_health_failed(health_records, last_n_sec=15 * 60, min_records=5):
+    """
+    If was not healthy in the last n seconds and at least for min_records
+    """
+    if len(health_records) < min_records:
+        return False
+
+    # min_records check
+    min_records_fail = all(
+        [rec[1] == 0 for rec in health_records[-min_records:]]
+    )  # if true, was not healthy
+    last_n_sec_fail = all(
+        [rec[1] == 0 for rec in health_records if time.time() - rec[0] < last_n_sec]
+    )  # if true, was not healthy
+    if min_records_fail and last_n_sec_fail:
+        return True
+    return False
 
 
 def redundant_code_validator(text, fuzz_ratio_threshold):
