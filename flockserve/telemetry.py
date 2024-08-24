@@ -7,6 +7,8 @@ import logging, sys, os
 
 def get_logger(verbosity):
     log_level = 10 if verbosity >= 2 else 20 if verbosity == 1 else 40
+    log_format = "%(asctime)s - %(levelname)s - %(message)s"
+    fmt = logging.Formatter(log_format)
 
     logger = logging.getLogger(__name__)
     logger.setLevel(log_level)
@@ -14,10 +16,12 @@ def get_logger(verbosity):
     log_file_path = os.path.join(os.path.expanduser("~"), "flockserve.log")
     file_handler = logging.FileHandler(log_file_path)
     file_handler.setLevel(log_level)  # Set the logging level for the file
+    file_handler.setFormatter(fmt)  # Set the format for the file
     logger.addHandler(file_handler)
 
     stream_handler = logging.StreamHandler(sys.stdout)
     stream_handler.setLevel(log_level)  # Set the logging level for stdout
+    stream_handler.setFormatter(fmt)  # Set the logging format for stdout
     logger.addHandler(stream_handler)
     return logger
 
