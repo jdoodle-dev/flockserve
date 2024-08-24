@@ -266,7 +266,9 @@ class WorkerManager:
                     self.flockserve.logger.info(f"Error during health check : {e}")
             await asyncio.sleep(30)
 
-    async def health_history_check(self):
+    async def health_history_check(
+        self, initialization_n_min_limit, health_n_min_limit
+    ):
         while True:
             for worker in list(self.worker_handlers):
                 self.flockserve.logger.debug("=" * 50)
@@ -279,19 +281,22 @@ class WorkerManager:
 
                 # initilization check
                 if (
-                    time.time() - worker.initialization_time > 30 * 60
-                ):  # If worker started to be provisioned just 20mins ago don't take any action
+                    time.time() - worker.initialization_time
+                    > initialization_n_min_limit * 60
+                ):  # If worker started to be provisioned just initialization_n_min_limit ago don't take any action
                     if (
                         worker.initializing
-                    ):  # If initializing for more than 15minutes then kill
+                    ):  # If provisioned more thaninitialization_n_min_limit ago still initializing --> Delete Worker
                         self.flockserve.logger.info("=" * 50)
                         self.flockserve.logger.info(
                             f"Initialization failed for {worker.worker_name}"
                         )
                         self.flockserve.logger.info("=" * 50)
                         await self.delete_worker(worker)
-                    # Consider this only after initial search for a worker started 20mins ago -- thats why elif and not if
-                    elif is_health_failed(worker.health_records):
+                        # If provisioned more thaninitialization_n_min_limit ago AND not healthy more than last health_n_min_limit --> Delete Worker
+                    elif is_health_failed(
+                        worker.health_records, last_n_sec=health_n_min_limit * 60
+                    ):
                         self.flockserve.logger.info("=" * 50)
                         self.flockserve.logger.info(
                             f"Health history Failed for {worker.worker_name}"

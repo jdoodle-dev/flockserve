@@ -48,6 +48,8 @@ class FlockServe:
         verbosity: int = 1,  # 0: no logging, 1: info, 2: debug
         otel_collector_endpoint: str = "http://localhost:4317",
         reinit: bool = False,
+        initialization_n_min_limit: int = 30,
+        health_n_min_limit: int = 20,
         # otel_collector_config_path: str = 'examples/config.yaml',
         # service_acc_key_file: str = 'examples/gcp_service_acc_keyfile.json',
     ) -> None:
@@ -64,6 +66,8 @@ class FlockServe:
         self.worker_ready_path = worker_ready_path
         self.queue_tracking_window = queue_tracking_window
         self.node_control_key = node_control_key
+        self.initialization_n_min_limit = initialization_n_min_limit
+        self.health_n_min_limit = health_n_min_limit
 
         self.app: FastAPI = FastAPI()
         configure_tracing(self.app)
@@ -192,7 +196,11 @@ class FlockServe:
             asyncio.create_task(self.set_queue_tracker())
             asyncio.create_task(self.run_periodic_load_check())
             asyncio.create_task(self.worker_manager.periodic_worker_check())
-            asyncio.create_task(self.worker_manager.health_history_check())
+            asyncio.create_task(
+                self.worker_manager.health_history_check(
+                    self.initialization_n_min_limit, self.health_n_min_limit
+                )
+            )
 
             asyncio.create_task(self.run_periodic_db_inserts())
             self.logger.debug("!!!Startup completed!!!")
