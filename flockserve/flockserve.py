@@ -324,7 +324,11 @@ class FlockServe:
     async def handle_inference_request(
         self, data: bytes, headers, endpoint_path
     ) -> str:
+        self.queue_length += 1
+        self.total_requests += 1
+
         selected_worker = await self.load_balancer.select_worker()
+        selected_worker.queue_length += 1
         try:
             if (
                 endpoint_path == "/generate"
@@ -333,10 +337,6 @@ class FlockServe:
             ):
                 # Add to queue only for the requests coming to /generate
                 try:
-                    selected_worker.queue_length += 1
-                    self.queue_length += 1
-                    self.total_requests += 1
-
                     start = time.perf_counter()
                     async with self.app.state.http_client.post(
                         f"{selected_worker.base_url}{endpoint_path}",
@@ -376,7 +376,11 @@ class FlockServe:
 
     async def handle_stream_request3(self, data: bytes, headers, endpoint_path: str):
         s = time.perf_counter()
+        self.queue_length += 1
+        self.total_requests += 1
+
         selected_worker = await self.load_balancer.select_worker()
+        selected_worker.queue_length += 1
 
         def _record(return_chunk):
             e = time.perf_counter()
@@ -406,6 +410,7 @@ class FlockServe:
         ) as response:
             i = 0
             if response.status == 200:
+
                 async for chunk in response.content.iter_any():
                     i += 1
                     if chunk:
@@ -420,10 +425,16 @@ class FlockServe:
                                 if truncated:
                                     _record(processed_chunk)
                                     yield processed_chunk
+
+                                    self.queue_length -= 1
+                                    selected_worker.queue_length -= 1
+
                                     return
                         yield chunk.decode("utf-8")
 
                 _record(chunk.decode("utf-8"))
+                self.queue_length -= 1
+                selected_worker.queue_length -= 1
 
     async def handle_stream_request2(self, data: bytes, headers, endpoint_path: str):
         s = time.perf_counter()

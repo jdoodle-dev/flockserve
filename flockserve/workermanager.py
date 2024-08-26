@@ -9,6 +9,7 @@ import sky
 from .utils import record_metrics, is_health_failed
 import time
 import logging
+from datetime import datetime
 
 
 @dataclass
@@ -26,7 +27,7 @@ class WorkerHandler:
     health_records: List[tuple] = field(
         default_factory=list
     )  # [(timestemp, readiness)]    -1: initializing, 0: Setup phase      1: not healthy,     2:healthy
-    initialization_time = time.time()
+    initialization_time: float = field(default_factory=time.time)
 
     # handle: Optional[Any] = None
 
@@ -40,7 +41,9 @@ class WorkerManager:
     async def start_skypilot_worker(
         self, worker_id, worker_type="skypilot", reinit=False
     ):
-        worker_name = self.flockserve.worker_name_prefix + "-" + str(worker_id)
+        worker_name = (
+            self.flockserve.worker_name_prefix + "-" + str(worker_id)
+        )  # + generate_random_string(length=5)
         self.launcher_sub_process = multiprocessing.Process(
             target=WorkerManager.launch_task_process,
             args=(
@@ -57,6 +60,7 @@ class WorkerManager:
                 queue_length=0,
                 initializing=True,
                 ready=False,
+                initialization_time=time.time(),
             )
         )
         return self.launcher_sub_process.start()
@@ -75,6 +79,7 @@ class WorkerManager:
                 cluster_name=worker_name,
                 retry_until_up=False,
                 detach_run=True,
+                # dryrun=True,
             )
             print("Sky launch done.")
         # except Exception as e:
@@ -292,6 +297,14 @@ class WorkerManager:
                             f"Initialization failed for {worker.worker_name}"
                         )
                         self.flockserve.logger.info("=" * 50)
+
+                        self.flockserve.logger.info(
+                            f"Init time:{datetime.fromtimestamp(worker.initialization_time).strftime('%Y-%m-%d %H:%M:%S')}"
+                        )
+                        self.flockserve.logger.info(
+                            f"Current time:{datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')}"
+                        )
+
                         await self.delete_worker(worker)
                         # If provisioned more thaninitialization_n_min_limit ago AND not healthy more than last health_n_min_limit --> Delete Worker
                     elif is_health_failed(
@@ -330,18 +343,22 @@ class WorkerManager:
             if worker in self.worker_handlers:
                 while True:
                     try:
-                        await worker.session.close()
-                        self.flockserve.logger.info(
-                            f"Cut the connection session with {worker.worker_name}"
-                        )
-                        sky.down(cluster_name=worker.worker_name, purge=True)
-                        self.flockserve.logger.info(
-                            f"Run skydown for {worker.worker_name}"
-                        )
-                        self.worker_handlers.remove(worker)
-                        self.flockserve.logger.info(
-                            f"Removed  {worker.worker_name} from worker_handlers"
-                        )
+                        # await worker.session.close()
+                        # self.flockserve.logger.info(
+                        # f"Cut the connection session with {worker.worker_name}"
+                        # )
+                        if WorkerManager.worker_exists(worker.worker_name):
+                            sky.down(cluster_name=worker.worker_name, purge=True)
+                            self.flockserve.logger.info(
+                                f"Run skydown for {worker.worker_name}"
+                            )
+                        if worker.worker_name in [
+                            w.worker_name for w in self.worker_handlers
+                        ]:
+                            self.worker_handlers.remove(worker)
+                            self.flockserve.logger.info(
+                                f"Removed  {worker.worker_name} from worker_handlers"
+                            )
                         break
                     except Exception as e:
                         self.flockserve.logger.error(
