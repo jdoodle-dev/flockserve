@@ -58,8 +58,7 @@ class WorkerManager:
             sky.cancel(cluster_name=worker_name, all=True)
         # try:
         if WorkerManager.any_running_jobs(worker_name):
-            self.logger.info("Job already running, skipping launch.")
-            pass
+            print("Job already running, skipping launch.")
         else:
             sky.launch(
                 skypilot_task,
